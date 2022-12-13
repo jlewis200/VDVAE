@@ -33,6 +33,7 @@ def main():
     #experiment options
     parser.add_argument("-r", "--reconstruct", type=str, help="encode/decode an image")
     parser.add_argument("-q", "--interpolate", type=str, nargs=2, help="interpolate between 2 images")
+    parser.add_argument("-z", "--interpolations", type=int, default=3, help="interpolate between 2 images")
     parser.add_argument("-o", "--out", type=str, default="out.jpg", help="output file name")
 
     args = parser.parse_args()
@@ -62,7 +63,7 @@ def main():
         img_1 = Image.open(args.interpolate[1]).convert("RGB")
         img_1 = transform(img_1).unsqueeze(0)
 
-        interpolations = interpolate(encoder, decoder, img_0, img_1)
+        interpolations = interpolate(encoder, decoder, img_0, img_1, n_interpolations=args.interpolations)
         interpolations = [img_0] + interpolations + [img_1]
 
         montage = Image.new("RGB", (img_0.shape[-1] * len(interpolations), img_0.shape[-2]))
@@ -95,7 +96,7 @@ def interpolate(encoder, decoder, img_0, img_1, n_interpolations=3):
     for idx in range(0, 1 + n_interpolations):
         ratio = idx / n_interpolations
 
-        img = (img_0 * ratio) + (img_1 * (1 - ratio))
+        img = (img_0 * (1 - ratio)) + (img_1 * ratio)
 
         interpolations.append(decoder.forward(encoder.forward(img)[0]))
 
