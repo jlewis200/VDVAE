@@ -117,7 +117,7 @@ def reconstruct(encoder, decoder, img):
     return decoder.forward(encoder.forward(img)[0])
 
 
-def train(encoder=None, decoder=None, lr=0.0001, beta=0.1, epocs=50):
+def train(encoder=None, decoder=None, lr=0.0001, beta=0.1, epochs=50):
     """
     """
 
@@ -142,9 +142,9 @@ def train(encoder=None, decoder=None, lr=0.0001, beta=0.1, epocs=50):
 
     start_time = int(time())
 
-    for epoch in range(100):
+    for epoch in range(epochs):
         #save the model weights every 10 epochs
-        if epoch % 10 == 0:
+        if (1 + epoch) % 10 == 0:
             torch.save(encoder, f"checkpoints/encoder/{start_time}_{epoch}")
             torch.save(decoder, f"checkpoints/decoder/{start_time}_{epoch}")
 
