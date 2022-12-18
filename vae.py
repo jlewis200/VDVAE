@@ -82,7 +82,7 @@ def main():
         montage = get_montage([img_0] + interpolations + [img_1])
         filename_0 = args.interpolate[0].split('.')[0]
         filename_1 = args.interpolate[1].split('.')[0]
-        montage.save(f"interpolate_{filename_0}_{filename_1}.jpg")
+        montage.save(f"interpolation.jpg")
 
     if args.random is not None:
         imgs = sample(decoder, args.random)
@@ -95,10 +95,11 @@ def load_images(img_paths):
     Lead a list of pathnames, preprocess, return as a tensor with shape:
     N x 3 x H x W
     """
-
-    transform = Compose((ToTensor(), Resize(IMG_SIZE)))
-    imgs = [transform(Image.open(path).convert("RGB")).unsqueeze(0) for path in img_paths]
-    return torch.cat(imgs)
+    
+    if img_paths != []:
+        transform = Compose((ToTensor(), Resize(IMG_SIZE)))
+        imgs = [transform(Image.open(path).convert("RGB")).unsqueeze(0) for path in img_paths]
+        return torch.cat(imgs)
 
 
 def get_montage(imgs):
@@ -219,7 +220,7 @@ def train(encoder=None,
         #save the model weights every 10 epochs
         if (1 + epoch) % 10 == 0:
             torch.save(encoder, f"checkpoints/encoder/encoder_{epoch}")
-            torch.save(decoder, f"checkpoints/decoder/encoder_{epoch}")
+            torch.save(decoder, f"checkpoints/decoder/decoder_{epoch}")
 
         for batch, _ in dataloader:
             if imgs is not None:
