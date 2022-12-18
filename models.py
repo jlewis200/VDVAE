@@ -43,8 +43,7 @@ class Decoder(nn.Sequential):
         #shape:  N x 1024
 
         self.append(nn.Linear(1024, flat_size, bias=bias))
-        self.append(nn.Dropout(p=0.2))
-        self.append(nn.Linear(flat_size, flat_size, bias=bias))
+        self.append(nn.Dropout(p=0.05))
 
         #shape:  N x 4096
 
@@ -120,7 +119,7 @@ class Encoder(nn.Module):
 
         self.shared.append(nn.Flatten())
         self.shared.append(nn.Linear(flat_size, flat_size, bias=bias))
-        self.shared.append(nn.Dropout(p=0.2))
+        self.shared.append(nn.Dropout(p=0.05))
 
         #shape: N x 4096
 
