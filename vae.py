@@ -16,10 +16,10 @@ from torchvision.transforms import ToTensor, ToPILImage, Compose, Resize, Random
 from PIL import Image
 
 
-from models import Encoder, Decoder
+from models import VAE, VAEAvgPool 
 
 IMG_SIZE = (128, 128)
-
+GRAD_CLIP = 100
 
 def main():
     """
@@ -36,8 +36,7 @@ def main():
     parser.add_argument("-i", "--iterations", type=int, default=10, help="number of training iterations")
 
     #pre-trained options
-    parser.add_argument("-e", "--encoder", type=str)
-    parser.add_argument("-d", "--decoder", type=str)
+    parser.add_argument("-m", "--model", default="VAE", type=str)
 
     #experiment options
     parser.add_argument("--reconstruct", type=str, default=[], nargs="+", help="encode/decode an image")
@@ -47,34 +46,35 @@ def main():
 
     args = parser.parse_args()
 
-    encoder, decoder = None, None
+    model = None
 
-    if args.encoder is not None:
-        encoder = torch.load(args.encoder)
+    if args.model == "VAE":
+        model = VAE()
 
-    if args.decoder is not None:
-        decoder = torch.load(args.decoder)
+    elif args.model == "VAEAvgPool":
+        model = VAEAvgPool()
+
+    else:
+        model = torch.load(args.model)
 
     if args.train:
         imgs = load_images(args.reconstruct + args.interpolate)
-        encoder, decoder = train(encoder=encoder,
-                                 decoder=decoder,
-                                 learning_rate=args.learning_rate,
-                                 beta=args.beta,
-                                 epochs=args.iterations,
-                                 imgs=imgs)
+        model = train(model=model,
+                      learning_rate=args.learning_rate,
+                      beta=args.beta,
+                      epochs=args.iterations,
+                      imgs=imgs)
 
     if args.reconstruct != []:
         imgs = load_images(args.reconstruct)
-        imgs = reconstruct(encoder, decoder, imgs)
+        imgs = reconstruct(model, imgs)
 
         for img, filename in zip(imgs, args.reconstruct):
             ToPILImage()(img.squeeze(0)).save(f"reconstructed_{filename}")
 
     if args.interpolate != []:
         img_0, img_1 = load_images(args.interpolate).split(1)
-        interpolations = interpolate(encoder,
-                                     decoder,
+        interpolations = interpolate(model,
                                      img_0,
                                      img_1,
                                      n_interpolations=args.interpolations)
@@ -85,7 +85,7 @@ def main():
         montage.save(f"interpolation.jpg")
 
     if args.random is not None:
-        imgs = sample(decoder, args.random)
+        imgs = sample(model, args.random)
         montage = get_montage(imgs)
         montage.save("random_montage.jpg")
 
@@ -117,7 +117,7 @@ def get_montage(imgs):
     return montage
 
 
-def sample(decoder, n_samples):
+def sample(model, n_samples):
     """
     Get a number of random samples from the decoder.
     """
@@ -125,7 +125,7 @@ def sample(decoder, n_samples):
     imgs = []
 
     if torch.cuda.is_available():
-        decoder = decoder.cuda()
+        model = model.cuda()
 
     for _ in range(n_samples):
         random_latent = torch.rand(1, 1024)
@@ -133,94 +133,82 @@ def sample(decoder, n_samples):
         if torch.cuda.is_available():
             random_latent = random_latent.cuda()
 
-        img = decoder(random_latent)
-        imgs.append(img)
+        imgs.append(model.decode(random_latent).clamp(0, 1))
 
     return imgs
 
 
-def interpolate(encoder, decoder, img_0, img_1, n_interpolations=3):
+def interpolate(model, img_0, img_1, n_interpolations=3):
     """
     Perform a linear interpolation between the latent encodings of one image and another.
     """
 
 
     if torch.cuda.is_available():
-        encoder = encoder.cuda()
-        decoder = decoder.cuda()
+        model = model.cuda()
         img_0 = img_0.cuda()
         img_1 = img_1.cuda()
 
     interpolations = []
+    model.eval()
 
-    encoder.eval()
-    decoder.eval()
-
-    img_0, _ = encoder.forward(img_0)
-    img_1, _ = encoder.forward(img_1)
+    img_0, _ = model.encode(img_0)
+    img_1, _ = model.encode(img_1)
 
     for idx in range(0, 1 + n_interpolations):
         ratio = idx / n_interpolations
         img = (img_0 * (1 - ratio)) + (img_1 * ratio)
-        interpolations.append(decoder.forward(img))
+
+        #upsample the latent interpolation and clamp to color channel range
+        interpolations.append(model.decode(img).clamp(0, 1))
+    
 
     return interpolations
 
 
-def reconstruct(encoder, decoder, img):
+def reconstruct(model, img):
     """
     Encode/decode an image.  Return the reconstructed tensor.
     """
 
     if torch.cuda.is_available():
-        encoder = encoder.cuda()
-        decoder = decoder.cuda()
+        model = model.cuda()
         img = img.cuda()
 
-    encoder.eval()
-    decoder.eval()
+    model.eval()
 
-    return decoder.forward(encoder.forward(img)[0])
+    return model.decode(model.encode(img)[0])
 
 
-def train(encoder=None,
-          decoder=None,
+def train(model,
           learning_rate=0.0001,
           beta=0.1,
           epochs=50,
           imgs=None):
     """
-    Train the model using supplied hyperparameters.  The encoder and decoder can be supplied to
-    provide the model with a warm start.
+    Train the model using supplied hyperparameters.
     """
+#    from code import interact
+#    interact(local=locals())
 
     #use random horizontal flip to augment the dataset
     transform = Compose((ToTensor(), Resize(IMG_SIZE), RandomHorizontalFlip()))
     dataset = CelebA("celeba", download=True, transform=transform)
     dataloader = DataLoader(dataset,
-                            batch_size=192,
+                            batch_size=20,
                             shuffle=True,
                             num_workers=2,
                             prefetch_factor=192)
 
-    if encoder is None:
-        encoder = Encoder()
-
-    if decoder is None:
-        decoder = Decoder()
-
     if torch.cuda.is_available():
-        encoder = encoder.cuda()
-        decoder = decoder.cuda()
+        model = model.cuda()
 
-    optimizer = torch.optim.Adam(list(encoder.parameters()) + list(decoder.parameters()),
-                                 lr=learning_rate)
+    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
 
     for epoch in range(epochs):
         #save the model weights every 10 epochs
         if (1 + epoch) % 10 == 0:
-            torch.save(encoder, f"checkpoints/encoder/encoder_{epoch}")
-            torch.save(decoder, f"checkpoints/decoder/decoder_{epoch}")
+            torch.save(model, f"checkpoints/model_{epoch}")
 
         for batch, _ in dataloader:
             if imgs is not None:
@@ -230,18 +218,18 @@ def train(encoder=None,
                 batch = batch.cuda()
 
             print(f"{epoch} ", end='')
-            train_step(encoder, decoder, optimizer, beta, batch)
+            train_step(model, optimizer, beta, batch)
 
-    return encoder, decoder
+    return model
 
 
-def train_step(encoder, decoder, optimizer, beta, batch):
+def train_step(model, optimizer, beta, batch):
     """
     Take one training step for a given batch of data.
     """
 
     #project the sample to the latent dimensional space
-    mean, var = encoder.forward(batch)
+    mean, var = model.encode(batch)
 
     #get reparameterized sample using model mean as the mean and variance as the standard deviation
     std = torch.exp(var / 2)
@@ -251,26 +239,41 @@ def train_step(encoder, decoder, optimizer, beta, batch):
     encoded_rsample = encoded_normal.rsample()
 
     #reconstruct the original sample from the latent dimension representation
-    batch_prime = decoder.forward(encoded_rsample)
+    batch_prime = model.decode(encoded_rsample)
 
     #generate the target normal distribution of the appropriate shape
     unit_normal = torch.distributions.Normal(torch.zeros_like(mean), torch.ones_like(mean))
 
     #calculate the KL divergence between N(0, 1) and N(mean, std)
     loss_kl = (encoded_normal.log_prob(encoded_rsample) - \
-               unit_normal.log_prob(encoded_rsample)).mean()
+               unit_normal.log_prob(encoded_rsample)).mean().abs()
 
     #calculate the reconstruction loss
     loss_recon = torch.nn.functional.mse_loss(batch_prime, batch)
 
-    loss = beta * loss_kl + loss_recon
+    #get the per-convolution reconstruction loss
+    loss_conv = torch.nn.functional.mse_loss(model.encoder.convs[0].out_tensor, model.decoder.convs[4].out_tensor) + \
+                torch.nn.functional.mse_loss(model.encoder.convs[1].out_tensor, model.decoder.convs[3].out_tensor) + \
+                torch.nn.functional.mse_loss(model.encoder.convs[2].out_tensor, model.decoder.convs[2].out_tensor) + \
+                torch.nn.functional.mse_loss(model.encoder.convs[3].out_tensor, model.decoder.convs[1].out_tensor) + \
+                torch.nn.functional.mse_loss(model.encoder.convs[4].out_tensor, model.decoder.convs[0].out_tensor)
+
+    #sum the losses
+    loss = (beta * loss_kl) + loss_recon + (0.1 * loss_conv)
+
 
     #train the model weights
+    
     loss.backward()
-    optimizer.step()
+    grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), GRAD_CLIP).item()
+   
+    #skip backprop if gradients are out of control, from VDVAE
+    if grad_norm < GRAD_CLIP:
+        optimizer.step()
+    
     optimizer.zero_grad(set_to_none=True)
 
-    print(f"{loss.item():.5e} {loss_kl.item():.5e} {loss_recon.item():.5e}")
+    print(f"{grad_norm:.5e} {loss.item():.5e} {loss_kl.item():.5e} {loss_recon.item():.5e} {loss_conv.item():.5e}")
 
 
 if __name__ == "__main__":
