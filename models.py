@@ -226,23 +226,27 @@ class Block(nn.Sequential):
         self.append(nn.Conv2d(mid_channels, out_channels, 1))
 
 
-    def forward(self, tensor):
+    def forward(self, in_tensor):
         """
         Perform the forward pass through the convolution module.  Store the
         output out_tensor.
         """
 
         if self.up_sample:
-            tensor = interpolate(tensor, scale_factor=2)
+            in_tensor = interpolate(in_tensor, scale_factor=2)
         
-        tensor = super().forward(tensor)
-        
+        out_tensor = super().forward(in_tensor)
+      
+        #allow residual gradient flow if shapes match
+        if in_tensor.shape == out_tensor.shape:
+            out_tensor = out_tensor + in_tensor
+
         if self.down_sample:
-            tensor = avg_pool2d(tensor, 2)
+            out_tensor = avg_pool2d(out_tensor, 2)
 
-        self.out_tensor = tensor
+        self.out_tensor = out_tensor
 
-        return tensor
+        return out_tensor
 
 
 class VAEAvgPool(nn.Module):
@@ -255,8 +259,17 @@ class VAEAvgPool(nn.Module):
         super().__init__()
         bias = True
 
+        channels = [(  3, 64, 256),
+                    (256, 64, 256),
+                    (256, 64, 256),
+                    (256, 64, 256),
+                    (256, 64, 256),
+                    (256, 64, 256)]
+
+
         flat_size = 1024
         out_size = 1024
+        unflatten_shape = (256, 2, 2)
 
         self.encoder = nn.Module()
         self.decoder = nn.Sequential()
@@ -268,13 +281,6 @@ class VAEAvgPool(nn.Module):
         self.encoder.var = nn.Sequential()
 
         #shape:  N x 3 x 128 x 128
-
-        channels = [(  3, 256, 256),
-                    (256, 256, 256),
-                    (256, 256, 256),
-                    (256, 256, 256),
-                    (256, 256, 256),
-                    (256, 256, 256)]
 
         for channel in channels:
             self.encoder.convs.append(Block(*channel, down_sample=True))
@@ -297,15 +303,13 @@ class VAEAvgPool(nn.Module):
         self.decoder.unflatten = nn.Sequential()
         self.decoder.convs = nn.Sequential()
         
-        #self.out = nn.Sequential()
-
         #shape:  N x 1024
 
         self.decoder.unflatten.append(nn.Linear(out_size, flat_size, bias=bias))
 
         #shape:  N x 1024
 
-        self.decoder.unflatten.append(View((256, 2, 2)))
+        self.decoder.unflatten.append(View(unflatten_shape))
 
         #shape:  N x 256 x 2 x 2
 
