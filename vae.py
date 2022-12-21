@@ -8,6 +8,7 @@ Variational Auto Encoder
 # pylint: disable=no-member
 
 from argparse import ArgumentParser
+from time import time
 
 import torch
 from torch.utils.data import DataLoader
@@ -70,7 +71,7 @@ def main():
         imgs = reconstruct(model, imgs)
 
         for img, filename in zip(imgs, args.reconstruct):
-            ToPILImage()(img.squeeze(0)).save(f"reconstructed_{filename}")
+            ToPILImage()(img.squeeze(0)).save(f"reconstructed.jpg")
 
     if args.interpolate != []:
         img_0, img_1 = load_images(args.interpolate).split(1)
@@ -188,14 +189,14 @@ def train(model,
     """
     Train the model using supplied hyperparameters.
     """
-#    from code import interact
-#    interact(local=locals())
+
+    start_time = int(time())
 
     #use random horizontal flip to augment the dataset
     transform = Compose((ToTensor(), Resize(IMG_SIZE), RandomHorizontalFlip()))
     dataset = CelebA("celeba", download=True, transform=transform)
     dataloader = DataLoader(dataset,
-                            batch_size=20,
+                            batch_size=32,
                             shuffle=True,
                             num_workers=2,
                             prefetch_factor=192)
@@ -207,8 +208,8 @@ def train(model,
 
     for epoch in range(epochs):
         #save the model weights every 10 epochs
-        if (1 + epoch) % 10 == 0:
-            torch.save(model, f"checkpoints/model_{epoch}")
+        if (1 + epoch) % 1 == 0:
+            torch.save(model, f"checkpoints/model_{start_time}_{epoch}")
 
         for batch, _ in dataloader:
             if imgs is not None:
@@ -259,7 +260,7 @@ def train_step(model, optimizer, beta, batch):
                 torch.nn.functional.mse_loss(model.encoder.convs[4].out_tensor, model.decoder.convs[0].out_tensor)
 
     #sum the losses
-    loss = (beta * loss_kl) + loss_recon + (0.1 * loss_conv)
+    loss = (beta * loss_kl) + loss_recon + (0.001 * loss_conv)
 
 
     #train the model weights
