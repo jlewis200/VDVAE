@@ -17,7 +17,7 @@ from torchvision.transforms import ToTensor, ToPILImage, Compose, Resize, Random
 from PIL import Image
 
 
-from models import VAE, VAEAvgPool 
+from models import VAE
 
 IMG_SIZE = (128, 128)
 GRAD_CLIP = 100
@@ -51,9 +51,6 @@ def main():
 
     if args.model == "VAE":
         model = VAE()
-
-    elif args.model == "VAEAvgPool":
-        model = VAEAvgPool()
 
     else:
         model = torch.load(args.model)
@@ -177,8 +174,9 @@ def reconstruct(model, img):
         img = img.cuda()
 
     model.eval()
-
-    return model.decode(model.encode(img)[0])
+    
+    model.encode(img)[0]
+    return model.decode()
 
 
 def train(model,
@@ -196,15 +194,17 @@ def train(model,
     transform = Compose((ToTensor(), Resize(IMG_SIZE), RandomHorizontalFlip()))
     dataset = CelebA("celeba", download=True, transform=transform)
     dataloader = DataLoader(dataset,
-                            batch_size=32,
+                            batch_size=14,
                             shuffle=True,
                             num_workers=2,
-                            prefetch_factor=192)
+                            prefetch_factor=192,
+                            drop_last=True)
 
     if torch.cuda.is_available():
         model = model.cuda()
 
-    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
+    #optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
+    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate, betas=(0.9, 0.9))
 
     for epoch in range(epochs):
         #save the model weights every 10 epochs
@@ -230,51 +230,32 @@ def train_step(model, optimizer, beta, batch):
     """
 
     #project the sample to the latent dimensional space
-    mean, var = model.encode(batch)
-
-    #get reparameterized sample using model mean as the mean and variance as the standard deviation
-    std = torch.exp(var / 2)
-    encoded_normal = torch.distributions.Normal(mean, std)
-
-    #reparameterized sample from N(mean, std)
-    encoded_rsample = encoded_normal.rsample()
+    model.encode(batch)
 
     #reconstruct the original sample from the latent dimension representation
-    batch_prime = model.decode(encoded_rsample)
+    batch_prime = model.decode()
 
-    #generate the target normal distribution of the appropriate shape
-    unit_normal = torch.distributions.Normal(torch.zeros_like(mean), torch.ones_like(mean))
-
-    #calculate the KL divergence between N(0, 1) and N(mean, std)
-    loss_kl = (encoded_normal.log_prob(encoded_rsample) - \
-               unit_normal.log_prob(encoded_rsample)).mean().abs()
+    #get the KL divergence loss from the model
+    loss_kl = model.get_loss_kl()
 
     #calculate the reconstruction loss
     loss_recon = torch.nn.functional.mse_loss(batch_prime, batch)
 
-    #get the per-convolution reconstruction loss
-    loss_conv = torch.nn.functional.mse_loss(model.encoder.convs[0].out_tensor, model.decoder.convs[4].out_tensor) + \
-                torch.nn.functional.mse_loss(model.encoder.convs[1].out_tensor, model.decoder.convs[3].out_tensor) + \
-                torch.nn.functional.mse_loss(model.encoder.convs[2].out_tensor, model.decoder.convs[2].out_tensor) + \
-                torch.nn.functional.mse_loss(model.encoder.convs[3].out_tensor, model.decoder.convs[1].out_tensor) + \
-                torch.nn.functional.mse_loss(model.encoder.convs[4].out_tensor, model.decoder.convs[0].out_tensor)
-
     #sum the losses
-    loss = (beta * loss_kl) + loss_recon + (0.001 * loss_conv)
+    loss = (beta * loss_kl) + loss_recon
 
-
-    #train the model weights
-    
+    #train the model
     loss.backward()
     grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), GRAD_CLIP).item()
    
-    #skip backprop if gradients are out of control, from VDVAE
+    #skip optimizer step if gradients are out of control, from VDVAE
     if grad_norm < GRAD_CLIP:
         optimizer.step()
     
-    optimizer.zero_grad(set_to_none=True)
+    #optimizer.zero_grad(set_to_none=True)
+    optimizer.zero_grad()
 
-    print(f"{grad_norm:.5e} {loss.item():.5e} {loss_kl.item():.5e} {loss_recon.item():.5e} {loss_conv.item():.5e}")
+    print(f"{grad_norm:.5e} {loss.item():.5e} {loss_kl.item():.5e} {loss_recon.item():.5e} ")
 
 
 if __name__ == "__main__":
