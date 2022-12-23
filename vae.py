@@ -126,12 +126,7 @@ def sample(model, n_samples):
         model = model.cuda()
 
     for _ in range(n_samples):
-        random_latent = torch.rand(1, 1024)
-
-        if torch.cuda.is_available():
-            random_latent = random_latent.cuda()
-
-        imgs.append(model.decode(random_latent).clamp(0, 1))
+        imgs.append(model.sample(1, temp=0.2).clamp(0, 1))
 
     return imgs
 
@@ -176,7 +171,7 @@ def reconstruct(model, img):
     model.eval()
     
     model.encode(img)[0]
-    return model.decode()
+    return model.decode().clamp(0, 1)
 
 
 def train(model,
@@ -194,7 +189,7 @@ def train(model,
     transform = Compose((ToTensor(), Resize(IMG_SIZE), RandomHorizontalFlip()))
     dataset = CelebA("celeba", download=True, transform=transform)
     dataloader = DataLoader(dataset,
-                            batch_size=14,
+                            batch_size=16,
                             shuffle=True,
                             num_workers=2,
                             prefetch_factor=192,
@@ -211,7 +206,12 @@ def train(model,
         if (1 + epoch) % 1 == 0:
             torch.save(model, f"checkpoints/model_{start_time}_{epoch}")
 
+        epoch_start = time()
+        samples = 0
+
         for batch, _ in dataloader:
+            samples += batch.shape[0]
+
             if imgs is not None:
                 batch = torch.cat((batch, imgs))
 
@@ -219,7 +219,9 @@ def train(model,
                 batch = batch.cuda()
 
             print(f"{epoch} ", end='')
+            
             train_step(model, optimizer, beta, batch)
+            print(f"samples/sec:  {samples / (time() - epoch_start)}")
 
     return model
 
@@ -251,11 +253,14 @@ def train_step(model, optimizer, beta, batch):
     #skip optimizer step if gradients are out of control, from VDVAE
     if grad_norm < GRAD_CLIP:
         optimizer.step()
-    
+   
+    else:
+        print("skipping optimizer step")
+
     #optimizer.zero_grad(set_to_none=True)
     optimizer.zero_grad()
 
-    print(f"{grad_norm:.5e} {loss.item():.5e} {loss_kl.item():.5e} {loss_recon.item():.5e} ")
+    print(f"{grad_norm:.5e} {loss.item():.5e} {loss_kl.item():.5e} {loss_recon.item():.5e}")
 
 
 if __name__ == "__main__":

@@ -5,6 +5,8 @@ Variational Auto Encoder (VAE) encoder/decoder models.
 """
 
 import torch
+import math
+import numpy as np
 
 from torch import nn
 from torch.nn import GELU, Conv2d
@@ -62,7 +64,8 @@ class EncoderMetaBlock(nn.Module):
         self.activations = tensor
         
         #downsample
-        tensor = avg_pool2d(tensor, 2)
+        if tensor.shape[-1] > 1:
+            tensor = avg_pool2d(tensor, 2)
         
         return tensor
 
@@ -148,6 +151,31 @@ class DecoderMetaBlock(nn.Module):
            
         return self.decode_blocks(tensor)
 
+    def sample(self, tensor=None, temp=1.0):  #output of previous decoder-meta block, or None for first decoder-meta
+        """
+        """
+
+        if tensor is None:
+            #encoder information only enters the decoding path through reparameterized sample of z
+            #tensor will be None for the first decoder meta-block
+            #use a zero-tensor shaped like the paired encoder layer's activations
+            tensor = torch.zeros_like(self.bias)
+
+            if torch.cuda.is_available():
+                tensor = tensor.cuda()
+
+        else:
+            #upsample the output of the previous decoder meta block
+            tensor = interpolate(tensor, scale_factor=2)
+       
+        #add the bias term for this decoder-meta block
+        tensor = tensor + self.bias
+        
+        for decode_block in self.decode_blocks:
+            tensor = decode_block.sample(tensor, temp)
+
+        return tensor
+
     def get_loss_kl(self):
         """
         Get the KL divergence loss for each decoder block in this decoder meta block.
@@ -182,7 +210,9 @@ class DecoderBlock(nn.Module):
 
         #mid_channels and z_channels ratios from VDVAE
         mid_channels = channels // 4
-        self.z_channels = channels // 32
+
+        #z_channels fixed at 16
+        self.z_channels = 16
        
         #block ratios from VDVAE
         self.phi = Block(channels * 2, mid_channels, 2 * self.z_channels)
@@ -190,46 +220,84 @@ class DecoderBlock(nn.Module):
         self.z_projection = Conv2d(self.z_channels, channels, kernel_size=1)
         self.res = Block(channels, mid_channels, channels, res=True)
 
-
-    def forward(self,
-                tensor):            #output of previous decoder block
+    def forward(self, tensor):
         """
-        Perform the forward pass through the convolution module.  Store the
-        output out_tensor.
+        Perform a forward pass through the convolution module.
+
+        Note:  A ValueError during the creation of either normal distribution is a sign the 
+        learning rate is too high.  The mins/maxs of p_logvar have been observed to trend toward
+        inf/-inf when the LR is too high and training collapses.  The magnitude of the mean/logvar
+        tend to increase as the tensor resolution increases.
+        """      
+       
+        try:
+            #get the mean, log-variance of p, and the residual flow to the main path
+            theta = self.theta(tensor)
+            p_mean, p_logvar, res = torch.tensor_split(theta, (self.z_channels, 2 * self.z_channels), dim=1)
+
+            #get p = N(p_mean, p_std)
+            p_dist = torch.distributions.Normal(p_mean, torch.exp(p_logvar / 2))
+
+            #join the output from theta with the main branch
+            tensor = tensor + res
+
+            #get the activations from the paired-encoder block
+            enc_activations = self.encoder_meta_block.activations
+
+            #get the mean/log-variance of q
+            q_mean, q_logvar = self.phi(torch.cat((tensor, enc_activations), dim=1)).chunk(2, dim=1)
+     
+            #get q = N(q_mean, q_std)
+            q_dist = torch.distributions.Normal(q_mean, torch.exp(q_logvar / 2))
+
+            #get reparameterized sample from N(q_mean, q_std)
+            z_rsample = q_dist.rsample()
+
+            #calculate the KL divergence between p and q
+            self.loss_kl = (q_dist.log_prob(z_rsample) - p_dist.log_prob(z_rsample)).mean().abs()
+
+            #project z to the proper dimensions and join with main branch
+            tensor = tensor + self.z_projection(z_rsample)
+
+            #pass through the res block
+            tensor = self.res(tensor)
+
+        except ValueError:
+            print("ValueError:  check p/q distribution parameters.")
+            import code
+            code.interact(local=locals())
+
+        return tensor
+
+    def sample(self, tensor, temp):
         """
-
-        #get the activations from the paired-encoder block
-        enc_activations = self.encoder_meta_block.activations
-
-        #get the mean/log-variance of q
-        q_mean, q_logvar = self.phi(torch.cat((tensor, enc_activations), dim=1)).chunk(2, dim=1)
+        Perform a forward pass through the convolution module.  The main difference
+        between forward() and sample() is which distribution the latent variable z is
+        drawn from.  During training z is drawn from the posterior q(z|x), whereas during 
+        sampling z is drawn from the prior p(z).
+        """      
         
         #get the mean, log-variance of p, and the residual flow to the main path
         theta = self.theta(tensor)
         p_mean, p_logvar, res = torch.tensor_split(theta, (self.z_channels, 2 * self.z_channels), dim=1)
 
-        #interact(local=locals()) 
-        #join the output from theta with the main branch
-        tensor = tensor + res
-
-        #get q = N(q_mean, q_std)
-        q_dist = torch.distributions.Normal(q_mean, torch.exp(q_logvar / 2))
-
-        #get reparameterized sample from N(q_mean, q_std)
-        q_rsample = q_dist.rsample()
+        #modify log-variance of p according to temperature parameter
+        #p_logvar = p_logvar + torch.full_like(p_logvar, math.log(temp))
+        p_logvar = p_logvar + torch.ones_like(p_logvar) * np.log(temp)
 
         #get p = N(p_mean, p_std)
         p_dist = torch.distributions.Normal(p_mean, torch.exp(p_logvar / 2))
 
-        #calculate the KL divergence between p and q
-        self.loss_kl = (q_dist.log_prob(q_rsample) - p_dist.log_prob(q_rsample)).mean().abs()
+        #get reparameterized sample from N(p_mean, p_std)
+        z_rsample = p_dist.rsample()
 
-        tensor = tensor + self.z_projection(q_rsample)
+        #project z to the proper dimensions and join with main branch
+        tensor = tensor + self.z_projection(z_rsample)
 
+        #pass through the res block
         tensor = self.res(tensor)
 
         return tensor
-
 
 class VAE(nn.Module):
     """
@@ -248,8 +316,11 @@ class VAE(nn.Module):
             {"channels":256, "n_encoder_blocks":1},
             {"channels":256, "n_encoder_blocks":1},
             {"channels":256, "n_encoder_blocks":1},
+            {"channels":256, "n_encoder_blocks":1},
+            {"channels":256, "n_encoder_blocks":1},
             {"channels":256, "n_encoder_blocks":1},]
 
+        #TODO: refactor to remove the input convolution from the encoder blocks sequential
         self.encoder = nn.Sequential()
         self.encoder.append(Conv2d(3, 256, kernel_size=3, padding=1))
 
@@ -260,6 +331,8 @@ class VAE(nn.Module):
         #decoder
 
         decoder_layers = [
+            {"channels":256, "n_decoder_blocks":1, "bias_shape":(1, 256,   1,   1)},
+            {"channels":256, "n_decoder_blocks":1, "bias_shape":(1, 256,   2,   2)},
             {"channels":256, "n_decoder_blocks":1, "bias_shape":(1, 256,   4,   4)},
             {"channels":256, "n_decoder_blocks":1, "bias_shape":(1, 256,   8,   8)},
             {"channels":256, "n_decoder_blocks":1, "bias_shape":(1, 256,  16,  16)},
@@ -272,6 +345,7 @@ class VAE(nn.Module):
         for decoder_layer, encoder_meta_block in zip(decoder_layers, self.encoder[::-1]):
             self.decoder.append(DecoderMetaBlock(**decoder_layer, encoder_meta_block=encoder_meta_block))
 
+        #TODO: refactor to remove the output convolution from the encoder blocks sequential
         self.decoder.append(Conv2d(256, 3, kernel_size=3, padding=1))
 
     def encode(self, tensor):
@@ -281,14 +355,12 @@ class VAE(nn.Module):
     
         return self.encoder.forward(tensor)
 
-
-    def decode(self, tensor):
+    def decode(self, tensor=None):
         """
         Pass latent encoding tensor through the decoder.
         """
 
         return self.decoder.forward(tensor)
-
 
     def get_loss_kl(self):
         loss_kl = torch.zeros(1, requires_grad=True)
@@ -305,4 +377,22 @@ class VAE(nn.Module):
 
         return loss_kl
 
+    def sample(self, n_samples, temp=1.0):
+        """
+        Sample from the model.  Temperature controls the variance of the distributions the latent
+        encodings are drawn from.  A higher temperature leads to higher variance and more dynamic
+        results.
+        """
 
+        #set dummy activations in the encoder
+        self.encoder[-1].activations = torch.zeros_like(self.decoder[0].bias)
+    
+        tensor = None
+
+        #TODO:  this slice will have to be removed when the encoder metas get their own sequential
+        for decoder_meta_block in self.decoder[:-1]:
+            tensor = decoder_meta_block.sample(tensor, temp=temp)
+        
+        tensor = self.decoder[-1].forward(tensor)
+
+        return tensor
