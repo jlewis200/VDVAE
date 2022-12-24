@@ -311,18 +311,18 @@ class VAE(nn.Module):
         #encoder
 
         encoder_layers = [
-            {"channels":256, "n_encoder_blocks":1},
-            {"channels":256, "n_encoder_blocks":1},
-            {"channels":256, "n_encoder_blocks":1},
-            {"channels":256, "n_encoder_blocks":1},
-            {"channels":256, "n_encoder_blocks":1},
-            {"channels":256, "n_encoder_blocks":1},
-            {"channels":256, "n_encoder_blocks":1},
-            {"channels":256, "n_encoder_blocks":1},]
+            {"channels":512, "n_encoder_blocks":2},
+            {"channels":512, "n_encoder_blocks":2},
+            {"channels":512, "n_encoder_blocks":2},
+            {"channels":512, "n_encoder_blocks":2},
+            {"channels":512, "n_encoder_blocks":2},
+            {"channels":512, "n_encoder_blocks":2},
+            {"channels":512, "n_encoder_blocks":2},
+            {"channels":512, "n_encoder_blocks":2},]
 
         #TODO: refactor to remove the input convolution from the encoder blocks sequential
         self.encoder = nn.Sequential()
-        self.encoder.append(Conv2d(3, 256, kernel_size=3, padding=1))
+        self.encoder.append(Conv2d(3, 512, kernel_size=3, padding=1))
 
         for encoder_layer in encoder_layers:
             self.encoder.append(EncoderMetaBlock(**encoder_layer))
@@ -331,14 +331,14 @@ class VAE(nn.Module):
         #decoder
 
         decoder_layers = [
-            {"channels":256, "n_decoder_blocks":1, "bias_shape":(1, 256,   1,   1)},
-            {"channels":256, "n_decoder_blocks":1, "bias_shape":(1, 256,   2,   2)},
-            {"channels":256, "n_decoder_blocks":1, "bias_shape":(1, 256,   4,   4)},
-            {"channels":256, "n_decoder_blocks":1, "bias_shape":(1, 256,   8,   8)},
-            {"channels":256, "n_decoder_blocks":1, "bias_shape":(1, 256,  16,  16)},
-            {"channels":256, "n_decoder_blocks":1, "bias_shape":(1, 256,  32,  32)},
-            {"channels":256, "n_decoder_blocks":1, "bias_shape":(1, 256,  64,  64)},
-            {"channels":256, "n_decoder_blocks":1, "bias_shape":(1, 256, 128, 128)}]
+            {"channels":512, "n_decoder_blocks":2, "bias_shape":(1, 512,   1,   1)},
+            {"channels":512, "n_decoder_blocks":2, "bias_shape":(1, 512,   2,   2)},
+            {"channels":512, "n_decoder_blocks":2, "bias_shape":(1, 512,   4,   4)},
+            {"channels":512, "n_decoder_blocks":2, "bias_shape":(1, 512,   8,   8)},
+            {"channels":512, "n_decoder_blocks":2, "bias_shape":(1, 512,  16,  16)},
+            {"channels":512, "n_decoder_blocks":2, "bias_shape":(1, 512,  32,  32)},
+            {"channels":512, "n_decoder_blocks":2, "bias_shape":(1, 512,  64,  64)},
+            {"channels":512, "n_decoder_blocks":2, "bias_shape":(1, 512, 128, 128)}]
 
         self.decoder = nn.Sequential()
         
@@ -346,7 +346,7 @@ class VAE(nn.Module):
             self.decoder.append(DecoderMetaBlock(**decoder_layer, encoder_meta_block=encoder_meta_block))
 
         #TODO: refactor to remove the output convolution from the encoder blocks sequential
-        self.decoder.append(Conv2d(256, 3, kernel_size=3, padding=1))
+        self.decoder.append(Conv2d(512, 3, kernel_size=3, padding=1))
 
     def encode(self, tensor):
         """
