@@ -35,6 +35,7 @@ def main():
     parser.add_argument("-b", "--beta", type=float, default=1, help="relative weight of KL divergence loss")
     parser.add_argument("-l", "--learning-rate", type=float, default=0.0001, help="learning rate of optimizer")
     parser.add_argument("-i", "--iterations", type=int, default=10, help="number of training iterations")
+    parser.add_argument("-i", "--batch-size", type=int, default=8, help="batch size")
 
     #pre-trained options
     parser.add_argument("-m", "--model", default="VAE", type=str)
@@ -44,6 +45,7 @@ def main():
     parser.add_argument("--interpolate", type=str, default=[], nargs=2, help="interpolate between 2 images")
     parser.add_argument("--interpolations", type=int, default=3, help="number of interpolations")
     parser.add_argument("--random", type=int, help="number of random samples")
+    parser.add_argument("--temperature", type=float, default=1.0, help="temperature of random samples")
 
     args = parser.parse_args()
 
@@ -61,6 +63,7 @@ def main():
                       learning_rate=args.learning_rate,
                       beta=args.beta,
                       epochs=args.iterations,
+                      batch_size=args.batch_size,
                       imgs=imgs)
 
     if args.reconstruct != []:
@@ -83,7 +86,7 @@ def main():
         montage.save(f"interpolation.jpg")
 
     if args.random is not None:
-        imgs = sample(model, args.random)
+        imgs = sample(model, args.random, temp=args.temperature)
         montage = get_montage(imgs)
         montage.save("random_montage.jpg")
 
@@ -115,7 +118,7 @@ def get_montage(imgs):
     return montage
 
 
-def sample(model, n_samples):
+def sample(model, n_samples, temp=1.0):
     """
     Get a number of random samples from the decoder.
     """
@@ -126,7 +129,7 @@ def sample(model, n_samples):
         model = model.cuda()
 
     for _ in range(n_samples):
-        imgs.append(model.sample(1, temp=0.9).clamp(0, 1))
+        imgs.append(model.sample(1, temp=temp).clamp(0, 1))
 
     return imgs
 
@@ -178,6 +181,7 @@ def train(model,
           learning_rate=0.0001,
           beta=0.1,
           epochs=50,
+          batch_size=32,
           imgs=None):
     """
     Train the model using supplied hyperparameters.
@@ -189,10 +193,10 @@ def train(model,
     transform = Compose((ToTensor(), Resize(IMG_SIZE), RandomHorizontalFlip()))
     dataset = CelebA("celeba", download=True, transform=transform)
     dataloader = DataLoader(dataset,
-                            batch_size=8,
+                            batch_size=batch_size,
                             shuffle=True,
                             num_workers=2,
-                            prefetch_factor=192,
+                            prefetch_factor=batch_size,
                             drop_last=True)
 
     if torch.cuda.is_available():
