@@ -35,7 +35,7 @@ def main():
     parser.add_argument("-b", "--beta", type=float, default=1, help="relative weight of KL divergence loss")
     parser.add_argument("-l", "--learning-rate", type=float, default=0.0001, help="learning rate of optimizer")
     parser.add_argument("-i", "--iterations", type=int, default=10, help="number of training iterations")
-    parser.add_argument("-i", "--batch-size", type=int, default=8, help="batch size")
+    parser.add_argument("--batch-size", type=int, default=8, help="batch size")
 
     #pre-trained options
     parser.add_argument("-m", "--model", default="VAE", type=str)
