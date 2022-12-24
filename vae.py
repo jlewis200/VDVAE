@@ -126,7 +126,7 @@ def sample(model, n_samples):
         model = model.cuda()
 
     for _ in range(n_samples):
-        imgs.append(model.sample(1, temp=0.2).clamp(0, 1))
+        imgs.append(model.sample(1, temp=0.9).clamp(0, 1))
 
     return imgs
 
@@ -189,7 +189,7 @@ def train(model,
     transform = Compose((ToTensor(), Resize(IMG_SIZE), RandomHorizontalFlip()))
     dataset = CelebA("celeba", download=True, transform=transform)
     dataloader = DataLoader(dataset,
-                            batch_size=16,
+                            batch_size=4,
                             shuffle=True,
                             num_workers=2,
                             prefetch_factor=192,
