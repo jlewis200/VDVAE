@@ -189,7 +189,7 @@ def train(model,
     transform = Compose((ToTensor(), Resize(IMG_SIZE), RandomHorizontalFlip()))
     dataset = CelebA("celeba", download=True, transform=transform)
     dataloader = DataLoader(dataset,
-                            batch_size=4,
+                            batch_size=8,
                             shuffle=True,
                             num_workers=2,
                             prefetch_factor=192,
@@ -197,6 +197,9 @@ def train(model,
 
     if torch.cuda.is_available():
         model = model.cuda()
+
+    #use mixed-precision loss/gradient scaler
+    scaler = torch.cuda.amp.GradScaler()
 
     #optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate, betas=(0.9, 0.9))
@@ -218,49 +221,50 @@ def train(model,
             if torch.cuda.is_available():
                 batch = batch.cuda()
 
-            print(f"{epoch} ", end='')
             
-            train_step(model, optimizer, beta, batch)
-            print(f"samples/sec:  {samples / (time() - epoch_start)}")
+            loss, loss_kl, loss_recon =  train_step(model, optimizer, beta, batch, scaler)
+            samples_sec = samples / (time() - epoch_start)
+
+            print(f"{epoch} {samples_sec:.2e} {loss:.2e} {loss_kl:.2e} {loss_recon:.2e}")
 
     return model
 
 
-def train_step(model, optimizer, beta, batch):
+def train_step(model, optimizer, beta, batch, scaler):
     """
     Take one training step for a given batch of data.
     """
+   
+    #auto mixed precision
+    with torch.cuda.amp.autocast():
 
-    #project the sample to the latent dimensional space
-    model.encode(batch)
+        #project the sample to the latent dimensional space
+        model.encode(batch)
 
-    #reconstruct the original sample from the latent dimension representation
-    batch_prime = model.decode()
+        #reconstruct the original sample from the latent dimension representation
+        batch_prime = model.decode()
 
-    #get the KL divergence loss from the model
-    loss_kl = model.get_loss_kl()
+        #get the KL divergence loss from the model
+        loss_kl = model.get_loss_kl().mean()
 
-    #calculate the reconstruction loss
-    loss_recon = torch.nn.functional.mse_loss(batch_prime, batch)
-
-    #sum the losses
-    loss = (beta * loss_kl) + loss_recon
+        #calculate the reconstruction loss
+        loss_recon = torch.nn.functional.mse_loss(batch_prime, batch)
+        
+        #sum the losses
+        loss = (beta * loss_kl) + loss_recon
 
     #train the model
-    loss.backward()
-    grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), GRAD_CLIP).item()
-   
-    #skip optimizer step if gradients are out of control, from VDVAE
-    if grad_norm < GRAD_CLIP:
-        optimizer.step()
-   
-    else:
-        print("skipping optimizer step")
+    scaler.scale(loss).backward()
 
-    #optimizer.zero_grad(set_to_none=True)
+    #take an optimization step using the scaled gradients
+    scaler.step(optimizer)
+
+    #update the scaler paramters
+    scaler.update()
+   
     optimizer.zero_grad()
-
-    print(f"{grad_norm:.5e} {loss.item():.5e} {loss_kl.item():.5e} {loss_recon.item():.5e}")
+   
+    return loss.item(), loss_kl.item(), loss_recon.item()
 
 
 if __name__ == "__main__":

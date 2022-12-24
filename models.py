@@ -182,14 +182,14 @@ class DecoderMetaBlock(nn.Module):
         """
        
         #begin with a zero-tensor
-        loss_kl = torch.zeros(1, requires_grad=True)
+        loss_kl = torch.zeros(self.decode_blocks[0].loss_kl.shape[0], requires_grad=True)
 
         if torch.cuda.is_available():
             loss_kl = loss_kl.cuda()
 
         #sum the KL losses from each decder block
         for decode_block in self.decode_blocks:
-            loss_kl = loss_kl + (decode_block.loss_kl / len(self.decode_blocks))
+            loss_kl = loss_kl + decode_block.loss_kl.sum(dim=(1, 2, 3))
 
         return loss_kl
 
@@ -254,7 +254,7 @@ class DecoderBlock(nn.Module):
             z_rsample = q_dist.rsample()
 
             #calculate the KL divergence between p and q
-            self.loss_kl = (q_dist.log_prob(z_rsample) - p_dist.log_prob(z_rsample)).mean().abs()
+            self.loss_kl = q_dist.log_prob(z_rsample) - p_dist.log_prob(z_rsample)
 
             #project z to the proper dimensions and join with main branch
             tensor = tensor + self.z_projection(z_rsample)
@@ -264,8 +264,7 @@ class DecoderBlock(nn.Module):
 
         except ValueError:
             print("ValueError:  check p/q distribution parameters.")
-            import code
-            code.interact(local=locals())
+            interact(local=locals())
 
         return tensor
 
@@ -363,7 +362,9 @@ class VAE(nn.Module):
         return self.decoder.forward(tensor)
 
     def get_loss_kl(self):
-        loss_kl = torch.zeros(1, requires_grad=True)
+        #TODO: do this better, this should be shaped like the number of batches
+        loss_kl = torch.zeros(self.decoder[0].decode_blocks[0].loss_kl.shape[0],
+                              requires_grad=True)
 
         if torch.cuda.is_available():
             loss_kl = loss_kl.cuda()
@@ -373,7 +374,14 @@ class VAE(nn.Module):
                 #TODO:  fix the scaling, right now theres an output convolution in the decoder as well 
                 #TODO:  when that conv is removed, there won't be any need for the isinstance check
                 #scale by number of decoder-meta blocks
-                loss_kl = loss_kl + (decode_meta_block.get_loss_kl() / len(self.decoder))
+                loss_kl = loss_kl + decode_meta_block.get_loss_kl()
+
+            #TODO:  do this better, this should be color channels * H * W: 3 * 128 * 128
+            scale_factor = 3 * self.decoder[-2].bias.shape[-1]**2
+            #TODO:  remove the assert after I fix the abomination above
+            assert(scale_factor == 3 * 128 * 128)
+
+            loss_kl = loss_kl / scale_factor
 
         return loss_kl
 
