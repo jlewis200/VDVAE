@@ -38,17 +38,24 @@ class EncoderMetaBlock(nn.Module):
     
     def __init__(self,
                  channels,
-                 n_encoder_blocks):
+                 resolution,
+                 n_encoder_blocks,
+                 n_downsamples=1):
 
         super().__init__()
+
+        self.n_downsamples = n_downsamples
 
         #ratio per VDVAE
         mid_channels = channels // 4
         
         self.encoder_blocks = nn.Sequential()
 
+        #use a (3, 3) kernel if the resolution > 1
+        mid_kernel = 3 if resolution > 1 else 1
+        
         for _ in range(n_encoder_blocks):
-            self.encoder_blocks.append(Block(channels, mid_channels, channels))
+            self.encoder_blocks.append(Block(channels, mid_channels, channels, mid_kernel=mid_kernel))
         
         #self.encoder_blocks[-1].weight.data *= np.sqrt(1 / n_encoder_blocks)
        
@@ -59,12 +66,12 @@ class EncoderMetaBlock(nn.Module):
         """
 
         tensor = self.encoder_blocks.forward(tensor)
-      
+        
         #store the activations
         self.activations = tensor
         
         #downsample
-        if tensor.shape[-1] > 1:
+        for _ in range(self.n_downsamples):
             tensor = avg_pool2d(tensor, 2)
         
         return tensor
@@ -75,18 +82,21 @@ class Block(nn.Sequential):
                  in_channels,
                  mid_channels,
                  out_channels,
-                 res=False):
+                 res=False,
+                 mid_kernel=3):
 
         super().__init__()
 
         self.res = res
 
+        padding = 0 if mid_kernel == 1 else 1
+
         self.append(GELU())
         self.append(Conv2d(in_channels, mid_channels, 1))
         self.append(GELU())
-        self.append(Conv2d(mid_channels, mid_channels, 3, padding=1))
+        self.append(Conv2d(mid_channels, mid_channels, mid_kernel, padding=padding))
         self.append(GELU())
-        self.append(Conv2d(mid_channels, mid_channels, 3, padding=1))
+        self.append(Conv2d(mid_channels, mid_channels, mid_kernel, padding=padding))
         self.append(GELU())
         self.append(Conv2d(mid_channels, out_channels, 1))
 
@@ -113,19 +123,26 @@ class DecoderMetaBlock(nn.Module):
     def __init__(self,
                  channels,
                  n_decoder_blocks,
-                 bias_shape,
+                 resolution,
+                 bias=True,
+                 upsample_ratio=2,
                  encoder_meta_block=None):
         
         super().__init__()
-
+      
+        self.upsample_ratio=upsample_ratio
+        self.channels = channels
+        self.resolution = resolution
         self.encoder_meta_block=encoder_meta_block
         self.decode_blocks = nn.Sequential()
 
         for _ in range(n_decoder_blocks):
-            self.decode_blocks.append(DecoderBlock(channels, encoder_meta_block=encoder_meta_block))
+            self.decode_blocks.append(DecoderBlock(channels, resolution, encoder_meta_block=encoder_meta_block))
         
         self.activations = None
-        self.bias = nn.Parameter(torch.zeros(bias_shape))
+        
+        if bias:
+            self.bias = nn.Parameter(torch.zeros((1, channels, resolution, resolution)))
 
     def forward(self, tensor=None):  #output of previous decoder-meta block, or None for first decoder-meta
         """
@@ -136,18 +153,18 @@ class DecoderMetaBlock(nn.Module):
         if tensor is None:
             #encoder information only enters the decoding path through reparameterized sample of z
             #tensor will be None for the first decoder meta-block
-            #use a zero-tensor shaped like the paired encoder layer's activations
-            tensor = torch.zeros_like(self.encoder_meta_block.activations)
+            tensor = torch.zeros((1, self.channels, self.resolution, self.resolution))
 
             if torch.cuda.is_available():
                 tensor = tensor.cuda()
 
         else:
             #upsample the output of the previous decoder meta block
-            tensor = interpolate(tensor, scale_factor=2)
-       
-        #add the bias term for this decoder-meta block
-        tensor = tensor + self.bias
+            tensor = interpolate(tensor, scale_factor=self.upsample_ratio)
+      
+        if self.bias is not None:
+            #add the bias term for this decoder-meta block
+            tensor = tensor + self.bias
            
         return self.decode_blocks(tensor)
 
@@ -158,18 +175,18 @@ class DecoderMetaBlock(nn.Module):
         if tensor is None:
             #encoder information only enters the decoding path through reparameterized sample of z
             #tensor will be None for the first decoder meta-block
-            #use a zero-tensor shaped like the paired encoder layer's activations
-            tensor = torch.zeros_like(self.bias)
+            tensor = torch.zeros((1, channels, self.resolution, self.resolution))
 
             if torch.cuda.is_available():
                 tensor = tensor.cuda()
 
         else:
             #upsample the output of the previous decoder meta block
-            tensor = interpolate(tensor, scale_factor=2)
-       
-        #add the bias term for this decoder-meta block
-        tensor = tensor + self.bias
+            tensor = interpolate(tensor, scale_factor=self.upsample_ratio)
+      
+        if self.bias:
+            #add the bias term for this decoder-meta block
+            tensor = tensor + self.bias
         
         for decode_block in self.decode_blocks:
             tensor = decode_block.sample(tensor, temp)
@@ -201,6 +218,7 @@ class DecoderBlock(nn.Module):
 
     def __init__(self,
                  channels,
+                 resolution,
                  encoder_meta_block=None):
         
         super().__init__()
@@ -213,12 +231,15 @@ class DecoderBlock(nn.Module):
 
         #z_channels fixed at 16
         self.z_channels = 16
-       
+     
+        #use a (3, 3) kernel if the resolution > 1
+        mid_kernel = 3 if resolution > 1 else 1
+
         #block ratios from VDVAE
-        self.phi = Block(channels * 2, mid_channels, 2 * self.z_channels)
-        self.theta = Block(channels, mid_channels, channels + (2 * self.z_channels))
+        self.phi = Block(channels * 2, mid_channels, 2 * self.z_channels, mid_kernel=mid_kernel)
+        self.theta = Block(channels, mid_channels, channels + (2 * self.z_channels), mid_kernel=mid_kernel)
         self.z_projection = Conv2d(self.z_channels, channels, kernel_size=1)
-        self.res = Block(channels, mid_channels, channels, res=True)
+        self.res = Block(channels, mid_channels, channels, res=True, mid_kernel=mid_kernel)
 
     def forward(self, tensor):
         """
@@ -243,7 +264,7 @@ class DecoderBlock(nn.Module):
 
             #get the activations from the paired-encoder block
             enc_activations = self.encoder_meta_block.activations
-
+            
             #get the mean/log-variance of q
             q_mean, q_logvar = self.phi(torch.cat((tensor, enc_activations), dim=1)).chunk(2, dim=1)
      
@@ -264,7 +285,7 @@ class DecoderBlock(nn.Module):
 
         except ValueError:
             print("ValueError:  check p/q distribution parameters.")
-            interact(local=locals())
+            breakpoint()
 
         return tensor
 
@@ -310,14 +331,13 @@ class VAE(nn.Module):
         #encoder
 
         encoder_layers = [
-            {"channels":512, "n_encoder_blocks":2},
-            {"channels":512, "n_encoder_blocks":2},
-            {"channels":512, "n_encoder_blocks":2},
-            {"channels":512, "n_encoder_blocks":2},
-            {"channels":512, "n_encoder_blocks":2},
-            {"channels":512, "n_encoder_blocks":2},
-            {"channels":512, "n_encoder_blocks":2},
-            {"channels":512, "n_encoder_blocks":2},]
+            {"channels": 512, "n_encoder_blocks":  3, "resolution": 128},
+            {"channels": 512, "n_encoder_blocks":  8, "resolution":  64},
+            {"channels": 512, "n_encoder_blocks": 12, "resolution":  32},
+            {"channels": 512, "n_encoder_blocks": 17, "resolution":  16},
+            {"channels": 512, "n_encoder_blocks":  7, "resolution":   8},
+            {"channels": 512, "n_encoder_blocks":  5, "resolution":   4, "n_downsamples": 2},
+            {"channels": 512, "n_encoder_blocks":  4, "resolution":   1, "n_downsamples": 0}]
 
         #TODO: refactor to remove the input convolution from the encoder blocks sequential
         self.encoder = nn.Sequential()
@@ -330,14 +350,13 @@ class VAE(nn.Module):
         #decoder
 
         decoder_layers = [
-            {"channels":512, "n_decoder_blocks":2, "bias_shape":(1, 512,   1,   1)},
-            {"channels":512, "n_decoder_blocks":2, "bias_shape":(1, 512,   2,   2)},
-            {"channels":512, "n_decoder_blocks":2, "bias_shape":(1, 512,   4,   4)},
-            {"channels":512, "n_decoder_blocks":2, "bias_shape":(1, 512,   8,   8)},
-            {"channels":512, "n_decoder_blocks":2, "bias_shape":(1, 512,  16,  16)},
-            {"channels":512, "n_decoder_blocks":2, "bias_shape":(1, 512,  32,  32)},
-            {"channels":512, "n_decoder_blocks":2, "bias_shape":(1, 512,  64,  64)},
-            {"channels":512, "n_decoder_blocks":2, "bias_shape":(1, 512, 128, 128)}]
+            {"channels": 512, "n_decoder_blocks":  2, "resolution":   1, "upsample_ratio": 0},
+            {"channels": 512, "n_decoder_blocks":  3, "resolution":   4, "upsample_ratio": 4},
+            {"channels": 512, "n_decoder_blocks":  4, "resolution":   8},
+            {"channels": 512, "n_decoder_blocks":  9, "resolution":  16},
+            {"channels": 512, "n_decoder_blocks": 21, "resolution":  32},
+            {"channels": 512, "n_decoder_blocks": 13, "resolution":  64},
+            {"channels": 512, "n_decoder_blocks":  7, "resolution": 128}]
 
         self.decoder = nn.Sequential()
         
@@ -377,7 +396,7 @@ class VAE(nn.Module):
                 loss_kl = loss_kl + decode_meta_block.get_loss_kl()
 
             #TODO:  do this better, this should be color channels * H * W: 3 * 128 * 128
-            scale_factor = 3 * self.decoder[-2].bias.shape[-1]**2
+            scale_factor = 3 * self.decoder[-2].resolution**2
             #TODO:  remove the assert after I fix the abomination above
             assert(scale_factor == 3 * 128 * 128)
 
