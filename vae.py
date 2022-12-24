@@ -209,9 +209,8 @@ def train(model,
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate, betas=(0.9, 0.9))
 
     for epoch in range(epochs):
-        #save the model weights every 10 epochs
-        if (1 + epoch) % 1 == 0:
-            torch.save(model, f"checkpoints/model_{start_time}_{epoch}")
+        #save the model weights
+        torch.save(model, f"checkpoints/model_{start_time}_{epoch}")
 
         epoch_start = time()
         samples = 0
