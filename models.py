@@ -153,7 +153,7 @@ class DecoderMetaBlock(nn.Module):
         if tensor is None:
             #encoder information only enters the decoding path through reparameterized sample of z
             #tensor will be None for the first decoder meta-block
-            tensor = torch.zeros((1, self.channels, self.resolution, self.resolution))
+            tensor = torch.zeros_like(self.encoder_meta_block.activations)
 
             if torch.cuda.is_available():
                 tensor = tensor.cuda()
@@ -264,7 +264,7 @@ class DecoderBlock(nn.Module):
 
             #get the activations from the paired-encoder block
             enc_activations = self.encoder_meta_block.activations
-            
+
             #get the mean/log-variance of q
             q_mean, q_logvar = self.phi(torch.cat((tensor, enc_activations), dim=1)).chunk(2, dim=1)
      
