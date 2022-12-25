@@ -21,8 +21,8 @@ from PIL import Image
 
 from models import VAE
 
-IMG_SIZE = (32, 32)
-#IMG_SIZE = (128, 128)
+#IMG_SIZE = (32, 32)
+IMG_SIZE = (128, 128)
 GRAD_CLIP = 100
 
 def main():
@@ -52,7 +52,8 @@ def main():
 
     args = parser.parse_args()
 
-    transform = Compose((ToTensor(), Resize(IMG_SIZE), Normalize((0.5, 0.5, 0.5), (1, 1, 1))))
+    #transform = Compose((ToTensor(), Resize(IMG_SIZE), Normalize((0.5, 0.5, 0.5), (1, 1, 1))))
+    transform = Compose((ToTensor(), Resize(IMG_SIZE)))
 
     if args.model == "VAE-cifar10":
         encoder_layers = [
@@ -74,24 +75,44 @@ def main():
 
 
     elif args.model == "VAE-celeba":
+#        encoder_layers = [
+#            {"channels": 512, "n_blocks":  3, "resolution": 128},
+#            {"channels": 512, "n_blocks":  8, "resolution":  64},
+#            {"channels": 512, "n_blocks": 12, "resolution":  32},
+#            {"channels": 512, "n_blocks": 17, "resolution":  16},
+#            {"channels": 512, "n_blocks":  7, "resolution":   8},
+#            {"channels": 512, "n_blocks":  5, "resolution":   4, "n_downsamples": 2},
+#            {"channels": 512, "n_blocks":  4, "resolution":   1, "n_downsamples": 0}]   
+#
+#        decoder_layers = [
+#            {"channels": 512, "n_blocks":  2, "resolution":   1, "upsample_ratio": 0},
+#            {"channels": 512, "n_blocks":  3, "resolution":   4, "upsample_ratio": 4},
+#            {"channels": 512, "n_blocks":  4, "resolution":   8},
+#            {"channels": 512, "n_blocks":  9, "resolution":  16},
+#            {"channels": 512, "n_blocks": 21, "resolution":  32},
+#            {"channels": 512, "n_blocks": 13, "resolution":  64, "bias": False},
+#            {"channels": 512, "n_blocks":  7, "resolution": 128, "bias": False}]
+
         encoder_layers = [
-            {"channels": 512, "n_blocks":  3, "resolution": 128},
-            {"channels": 512, "n_blocks":  8, "resolution":  64},
-            {"channels": 512, "n_blocks": 12, "resolution":  32},
-            {"channels": 512, "n_blocks": 17, "resolution":  16},
-            {"channels": 512, "n_blocks":  7, "resolution":   8},
-            {"channels": 512, "n_blocks":  5, "resolution":   4, "n_downsamples": 2},
-            {"channels": 512, "n_blocks":  4, "resolution":   1, "n_downsamples": 0}]   
+            {"channels": 512, "n_blocks":  2, "resolution": 128},
+            {"channels": 512, "n_blocks":  2, "resolution":  64},
+            {"channels": 512, "n_blocks":  2, "resolution":  32},
+            {"channels": 512, "n_blocks":  2, "resolution":  16},
+            {"channels": 512, "n_blocks":  2, "resolution":   8},
+            {"channels": 512, "n_blocks":  2, "resolution":   4},
+            {"channels": 512, "n_blocks":  2, "resolution":   2},
+            {"channels": 512, "n_blocks":  2, "resolution":   1, "n_downsamples": 0}]   
 
         decoder_layers = [
             {"channels": 512, "n_blocks":  2, "resolution":   1, "upsample_ratio": 0},
-            {"channels": 512, "n_blocks":  3, "resolution":   4, "upsample_ratio": 4},
-            {"channels": 512, "n_blocks":  4, "resolution":   8},
-            {"channels": 512, "n_blocks":  9, "resolution":  16},
-            {"channels": 512, "n_blocks": 21, "resolution":  32},
-            {"channels": 512, "n_blocks": 13, "resolution":  64, "bias": False},
-            {"channels": 512, "n_blocks":  7, "resolution": 128, "bias": False}]
-
+            {"channels": 512, "n_blocks":  2, "resolution":   2},
+            {"channels": 512, "n_blocks":  2, "resolution":   4},
+            {"channels": 512, "n_blocks":  2, "resolution":   8},
+            {"channels": 512, "n_blocks":  2, "resolution":  16},
+            {"channels": 512, "n_blocks":  2, "resolution":  32},
+            {"channels": 512, "n_blocks":  2, "resolution":  64},
+            {"channels": 512, "n_blocks":  2, "resolution": 128}]
+        
         model = VAE(encoder_layers, decoder_layers)
         dataset = CelebA("celeba", download=True, transform=transform)
 
@@ -138,8 +159,8 @@ def load_images(img_paths):
     """
     
     if img_paths != []:
-        transform = Compose((ToTensor(), Resize(IMG_SIZE)), Normalize((0.5, 0.5, 0.5), (1, 1, 1)))
-        imgs = [transform(Image.open(path).convert("RGB")).unsqueeze(0) + 0.5 for path in img_paths]
+        transform = Compose((ToTensor(), Resize(IMG_SIZE), Normalize((0.5, 0.5, 0.5), (1, 1, 1))))
+        imgs = [transform(Image.open(path).convert("RGB")).unsqueeze(0) for path in img_paths]
         return torch.cat(imgs)
 
 
@@ -169,7 +190,7 @@ def sample(model, n_samples, temp=1.0):
         model = model.cuda()
 
     for _ in range(n_samples):
-        imgs.append(model.sample(1, temp=temp).clamp(0, 1))
+        imgs.append((model.sample(1, temp=temp) + 0.5).clamp(0, 1))
 
     return imgs
 
@@ -213,8 +234,8 @@ def reconstruct(model, img):
 
     model.eval()
     
-    model.encode(img)[0]
-    return model.decode().clamp(0, 1)
+    activations = model.encode(img)
+    return (model.decode(activations) + 0.5).clamp(0, 1)
 
 
 def train(model,
