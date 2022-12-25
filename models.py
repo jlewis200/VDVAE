@@ -39,11 +39,12 @@ class EncoderMetaBlock(nn.Module):
     def __init__(self,
                  channels,
                  resolution,
-                 n_encoder_blocks,
+                 n_blocks,
                  n_downsamples=1):
 
         super().__init__()
 
+        self.resolution = resolution
         self.n_downsamples = n_downsamples
 
         #ratio per VDVAE
@@ -54,10 +55,10 @@ class EncoderMetaBlock(nn.Module):
         #use a (3, 3) kernel if the resolution > 1
         mid_kernel = 3 if resolution > 1 else 1
         
-        for _ in range(n_encoder_blocks):
+        for _ in range(n_blocks):
             self.encoder_blocks.append(Block(channels, mid_channels, channels, mid_kernel=mid_kernel))
         
-        #self.encoder_blocks[-1].weight.data *= np.sqrt(1 / n_encoder_blocks)
+        #self.encoder_blocks[-1].weight.data *= np.sqrt(1 / n_blocks)
        
     def forward(self, tensor):
         """
@@ -122,29 +123,27 @@ class DecoderMetaBlock(nn.Module):
 
     def __init__(self,
                  channels,
-                 n_decoder_blocks,
+                 n_blocks,
                  resolution,
                  bias=True,
-                 upsample_ratio=2,
-                 encoder_meta_block=None):
+                 upsample_ratio=2):
         
         super().__init__()
       
         self.upsample_ratio=upsample_ratio
         self.channels = channels
         self.resolution = resolution
-        self.encoder_meta_block=encoder_meta_block
-        self.decode_blocks = nn.Sequential()
+        self.decode_blocks = nn.ModuleList()
 
-        for _ in range(n_decoder_blocks):
-            self.decode_blocks.append(DecoderBlock(channels, resolution, encoder_meta_block=encoder_meta_block))
+        for _ in range(n_blocks):
+            self.decode_blocks.append(DecoderBlock(channels, resolution))
         
-        self.activations = None
+        self.bias = None
         
         if bias:
             self.bias = nn.Parameter(torch.zeros((1, channels, resolution, resolution)))
 
-    def forward(self, tensor=None):  #output of previous decoder-meta block, or None for first decoder-meta
+    def forward(self, tensor, activations):
         """
         Perform the forward pass through the convolution module.  Store the
         output out_tensor.
@@ -153,7 +152,7 @@ class DecoderMetaBlock(nn.Module):
         if tensor is None:
             #encoder information only enters the decoding path through reparameterized sample of z
             #tensor will be None for the first decoder meta-block
-            tensor = torch.zeros_like(self.encoder_meta_block.activations)
+            tensor = torch.zeros_like(activations)
 
             if torch.cuda.is_available():
                 tensor = tensor.cuda()
@@ -165,8 +164,11 @@ class DecoderMetaBlock(nn.Module):
         if self.bias is not None:
             #add the bias term for this decoder-meta block
             tensor = tensor + self.bias
-           
-        return self.decode_blocks(tensor)
+          
+        for decode_block in self.decode_blocks:
+            tensor = decode_block(tensor, activations)
+
+        return tensor
 
     def sample(self, tensor=None, temp=1.0):  #output of previous decoder-meta block, or None for first decoder-meta
         """
@@ -197,18 +199,17 @@ class DecoderMetaBlock(nn.Module):
         """
         Get the KL divergence loss for each decoder block in this decoder meta block.
         """
-       
-        #begin with a zero-tensor
-        loss_kl = torch.zeros(self.decode_blocks[0].loss_kl.shape[0], requires_grad=True)
 
-        if torch.cuda.is_available():
-            loss_kl = loss_kl.cuda()
+        losses = []
 
-        #sum the KL losses from each decder block
+        #gather the KL losses from each decder block
         for decode_block in self.decode_blocks:
-            loss_kl = loss_kl + decode_block.loss_kl.sum(dim=(1, 2, 3))
+            losses.append(decode_block.loss_kl.sum(dim=(1, 2, 3)))
 
-        return loss_kl
+        #sum the tensors (gradients are preserved)
+        loss_kl = sum(losses)
+
+        return loss_kl      
 
 
 class DecoderBlock(nn.Module):
@@ -241,7 +242,7 @@ class DecoderBlock(nn.Module):
         self.z_projection = Conv2d(self.z_channels, channels, kernel_size=1)
         self.res = Block(channels, mid_channels, channels, res=True, mid_kernel=mid_kernel)
 
-    def forward(self, tensor):
+    def forward(self, tensor, activations):
         """
         Perform a forward pass through the convolution module.
 
@@ -251,41 +252,33 @@ class DecoderBlock(nn.Module):
         tend to increase as the tensor resolution increases.
         """      
        
-        try:
-            #get the mean, log-variance of p, and the residual flow to the main path
-            theta = self.theta(tensor)
-            p_mean, p_logvar, res = torch.tensor_split(theta, (self.z_channels, 2 * self.z_channels), dim=1)
+        #get the mean, log-variance of p, and the residual flow to the main path
+        theta = self.theta(tensor)
+        p_mean, p_logvar, res = torch.tensor_split(theta, (self.z_channels, 2 * self.z_channels), dim=1)
 
-            #get p = N(p_mean, p_std)
-            p_dist = torch.distributions.Normal(p_mean, torch.exp(p_logvar / 2))
+        #get p = N(p_mean, p_std)
+        p_dist = torch.distributions.Normal(p_mean, torch.exp(p_logvar / 2))
 
-            #join the output from theta with the main branch
-            tensor = tensor + res
+        #join the output from theta with the main branch
+        tensor = tensor + res
 
-            #get the activations from the paired-encoder block
-            enc_activations = self.encoder_meta_block.activations
+        #get the mean/log-variance of q
+        q_mean, q_logvar = self.phi(torch.cat((tensor, activations), dim=1)).chunk(2, dim=1)
+ 
+        #get q = N(q_mean, q_std)
+        q_dist = torch.distributions.Normal(q_mean, torch.exp(q_logvar / 2))
 
-            #get the mean/log-variance of q
-            q_mean, q_logvar = self.phi(torch.cat((tensor, enc_activations), dim=1)).chunk(2, dim=1)
-     
-            #get q = N(q_mean, q_std)
-            q_dist = torch.distributions.Normal(q_mean, torch.exp(q_logvar / 2))
+        #get reparameterized sample from N(q_mean, q_std)
+        z_rsample = q_dist.rsample()
 
-            #get reparameterized sample from N(q_mean, q_std)
-            z_rsample = q_dist.rsample()
+        #calculate the KL divergence between p and q
+        self.loss_kl = q_dist.log_prob(z_rsample) - p_dist.log_prob(z_rsample)
 
-            #calculate the KL divergence between p and q
-            self.loss_kl = q_dist.log_prob(z_rsample) - p_dist.log_prob(z_rsample)
+        #project z to the proper dimensions and join with main branch
+        tensor = tensor + self.z_projection(z_rsample)
 
-            #project z to the proper dimensions and join with main branch
-            tensor = tensor + self.z_projection(z_rsample)
-
-            #pass through the res block
-            tensor = self.res(tensor)
-
-        except ValueError:
-            print("ValueError:  check p/q distribution parameters.")
-            breakpoint()
+        #pass through the res block
+        tensor = self.res(tensor)
 
         return tensor
 
@@ -319,88 +312,95 @@ class DecoderBlock(nn.Module):
 
         return tensor
 
-class VAE(nn.Module):
-    """
-    VAE Encoder/Decoder using stride 1 convolutions and avgpool/interpolate for up/down sampling.
-    """
 
-    def __init__(self):
+class Encoder(nn.Module):
+    """
+    VAE Encoder class.
+    """
+    
+    def __init__(self, layers):
+        """
+        """
+        
         super().__init__()
 
-        ######################################################################## 
-        #encoder
+        self.in_conv = Conv2d(3, 512, kernel_size=3, padding=1)
 
-        encoder_layers = [
-            {"channels": 512, "n_encoder_blocks":  3, "resolution": 128},
-            {"channels": 512, "n_encoder_blocks":  8, "resolution":  64},
-            {"channels": 512, "n_encoder_blocks": 12, "resolution":  32},
-            {"channels": 512, "n_encoder_blocks": 17, "resolution":  16},
-            {"channels": 512, "n_encoder_blocks":  7, "resolution":   8},
-            {"channels": 512, "n_encoder_blocks":  5, "resolution":   4, "n_downsamples": 2},
-            {"channels": 512, "n_encoder_blocks":  4, "resolution":   1, "n_downsamples": 0}]
+        self.encoder_metas = nn.Sequential()
 
-        #TODO: refactor to remove the input convolution from the encoder blocks sequential
-        self.encoder = nn.Sequential()
-        self.encoder.append(Conv2d(3, 512, kernel_size=3, padding=1))
+        for layer in layers:
+            self.encoder_metas.append(EncoderMetaBlock(**layer))
 
-        for encoder_layer in encoder_layers:
-            self.encoder.append(EncoderMetaBlock(**encoder_layer))
+    def forward(self, tensor):
+        """
+        """
+
+        #input convolution
+        tensor = self.in_conv(tensor)
+
+        #decoder-metas
+        self.encoder_metas(tensor)
+
+        #collect the activations
+        activations = {}
+
+        for encoder_meta in self.encoder_metas:
+            activations[encoder_meta.resolution] = encoder_meta.activations
+
+        return activations
+
+class Decoder(nn.Module):
+    """
+    VAE Decoder class.
+    """
+
+    def __init__(self, layers):
+        """
+        """
         
-        ######################################################################## 
-        #decoder
-
-        decoder_layers = [
-            {"channels": 512, "n_decoder_blocks":  2, "resolution":   1, "upsample_ratio": 0},
-            {"channels": 512, "n_decoder_blocks":  3, "resolution":   4, "upsample_ratio": 4},
-            {"channels": 512, "n_decoder_blocks":  4, "resolution":   8},
-            {"channels": 512, "n_decoder_blocks":  9, "resolution":  16},
-            {"channels": 512, "n_decoder_blocks": 21, "resolution":  32},
-            {"channels": 512, "n_decoder_blocks": 13, "resolution":  64},
-            {"channels": 512, "n_decoder_blocks":  7, "resolution": 128}]
-
-        self.decoder = nn.Sequential()
+        super().__init__()
         
-        for decoder_layer, encoder_meta_block in zip(decoder_layers, self.encoder[::-1]):
-            self.decoder.append(DecoderMetaBlock(**decoder_layer, encoder_meta_block=encoder_meta_block))
+        self.decoder_metas = nn.ModuleList()
 
-        #TODO: refactor to remove the output convolution from the encoder blocks sequential
-        self.decoder.append(Conv2d(512, 3, kernel_size=3, padding=1))
+        for layer in layers:
+            self.decoder_metas.append(DecoderMetaBlock(**layer))
 
-    def encode(self, tensor):
-        """
-        Pass input tensor through the encoder.
-        """
-    
-        return self.encoder.forward(tensor)
+        self.gain = nn.Parameter(torch.ones((1, 512, 1, 1)))
+        self.bias = nn.Parameter(torch.zeros((1, 512, 1, 1)))
 
-    def decode(self, tensor=None):
+        self.out_conv = Conv2d(512, 3, kernel_size=3, padding=1)
+
+    def forward(self, activations):
         """
-        Pass latent encoding tensor through the decoder.
         """
 
-        return self.decoder.forward(tensor)
+        tensor = None
+
+        for decoder_meta in self.decoder_metas:
+            tensor = decoder_meta(tensor, activations[decoder_meta.resolution])
+
+        tensor = tensor * self.gain + self.bias
+        
+        return self.out_conv(tensor)
+
 
     def get_loss_kl(self):
-        #TODO: do this better, this should be shaped like the number of batches
-        loss_kl = torch.zeros(self.decoder[0].decode_blocks[0].loss_kl.shape[0],
-                              requires_grad=True)
+        """
+        """
 
-        if torch.cuda.is_available():
-            loss_kl = loss_kl.cuda()
+        losses = []
 
-        for decode_meta_block in self.decoder:
-            if isinstance(decode_meta_block, DecoderMetaBlock):
-                #TODO:  fix the scaling, right now theres an output convolution in the decoder as well 
-                #TODO:  when that conv is removed, there won't be any need for the isinstance check
-                #scale by number of decoder-meta blocks
-                loss_kl = loss_kl + decode_meta_block.get_loss_kl()
+        #collect the losses
+        for decoder_meta in self.decoder_metas:
+            losses.append(decoder_meta.get_loss_kl())
 
-            #TODO:  do this better, this should be color channels * H * W: 3 * 128 * 128
-            scale_factor = 3 * self.decoder[-2].resolution**2
-            #TODO:  remove the assert after I fix the abomination above
-            assert(scale_factor == 3 * 128 * 128)
+        #sum the tensors (gradients are preserved)
+        loss_kl = sum(losses)
 
-            loss_kl = loss_kl / scale_factor
+        #scale by the original resolution and color depth
+        scale_factor = 3 * self.decoder_metas[-1].resolution**2
+
+        loss_kl = loss_kl / scale_factor
 
         return loss_kl
 
@@ -423,3 +423,41 @@ class VAE(nn.Module):
         tensor = self.decoder[-1].forward(tensor)
 
         return tensor
+
+
+class VAE(nn.Module):
+    """
+    VAE Encoder/Decoder using stride 1 convolutions and avgpool/interpolate for up/down sampling.
+    """
+
+    def __init__(self, encoder_layers, decoder_layers):
+        super().__init__()
+
+        self.encoder = Encoder(encoder_layers)
+        self.decoder = Decoder(decoder_layers)
+
+    def encode(self, tensor):
+        """
+        Pass input tensor through the encoder.
+        """
+    
+        return self.encoder.forward(tensor)
+
+    def decode(self, tensor=None):
+        """
+        Pass latent encoding tensor through the decoder.
+        """
+
+        return self.decoder.forward(tensor)
+
+    def sample(self, n_samples, temp=1.0):
+        """
+        """
+
+        return self.decoder.sample(n_samples, temp)
+
+    def get_loss_kl(self):
+        """
+        """
+
+        return self.decoder.get_loss_kl()
