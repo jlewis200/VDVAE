@@ -106,7 +106,7 @@ class Decoder(nn.Module):
         Perform a forward pass through the decoder.
         """
 
-        tensor = torch.zeros_like(activations[decoder_group[0].resolution], requires_grad=True)
+        tensor = torch.zeros_like(activations[self.decoder_groups[0].resolution], requires_grad=True)
 
         if torch.cuda.is_available():
             tensor = tensor.cuda()
@@ -125,7 +125,7 @@ class Decoder(nn.Module):
         results.
         """
 
-        shape = (n_samples, decoder_group[0].channels, decoder_group[0].resolution, decoder_group[0].resolution)
+        shape = (n_samples, self.decoder_groups[0].channels, self.decoder_groups[0].resolution, self.decoder_groups[0].resolution)
         tensor = torch.zeros(shape)
 
         if torch.cuda.is_available():

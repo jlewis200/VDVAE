@@ -51,26 +51,42 @@ def main():
     args = parser.parse_args()
 
     #transform = Compose((ToTensor(), Resize(img_size), Normalize((0.5, 0.5, 0.5), (1, 1, 1))))
-    transform = Compose((ToTensor(), Resize(img_size)))
 
     if args.model == "VAE-cifar10":
+#        encoder_layers = [
+#            {"channels": 512, "n_blocks": 11, "resolution":  32},
+#            {"channels": 512, "n_blocks":  6, "resolution":  16},
+#            {"channels": 512, "n_blocks":  6, "resolution":   8},
+#            {"channels": 512, "n_blocks":  3, "resolution":   4, "n_downsamples": 2},
+#            {"channels": 512, "n_blocks":  3, "resolution":   1, "n_downsamples": 0}]
+#
+#        decoder_layers = [
+#            {"channels": 512, "n_blocks":  1, "resolution":   1, "upsample_ratio": 0},
+#            {"channels": 512, "n_blocks":  2, "resolution":   4, "upsample_ratio": 4},
+#            {"channels": 512, "n_blocks":  5, "resolution":   8},
+#            {"channels": 512, "n_blocks": 10, "resolution":  16},
+#            {"channels": 512, "n_blocks": 21, "resolution":  32}]
+
         encoder_layers = [
-            {"channels": 512, "n_blocks": 11, "resolution":  32},
-            {"channels": 512, "n_blocks":  6, "resolution":  16},
-            {"channels": 512, "n_blocks":  6, "resolution":   8},
-            {"channels": 512, "n_blocks":  3, "resolution":   4, "n_downsamples": 2},
-            {"channels": 512, "n_blocks":  3, "resolution":   1, "n_downsamples": 0}]
+            {"channels": 512, "n_blocks":  2, "resolution":  32},
+            {"channels": 512, "n_blocks":  2, "resolution":  16},
+            {"channels": 512, "n_blocks":  2, "resolution":   8},
+            {"channels": 512, "n_blocks":  2, "resolution":   4},
+            {"channels": 512, "n_blocks":  2, "resolution":   2},
+            {"channels": 512, "n_blocks":  2, "resolution":   1, "n_downsamples": 0}]
 
         decoder_layers = [
-            {"channels": 512, "n_blocks":  1, "resolution":   1, "upsample_ratio": 0},
-            {"channels": 512, "n_blocks":  2, "resolution":   4, "upsample_ratio": 4},
-            {"channels": 512, "n_blocks":  5, "resolution":   8},
-            {"channels": 512, "n_blocks": 10, "resolution":  16},
-            {"channels": 512, "n_blocks": 21, "resolution":  32}]
+            {"channels": 512, "n_blocks":  2, "resolution":   1, "upsample_ratio": 1},
+            {"channels": 512, "n_blocks":  2, "resolution":   2},
+            {"channels": 512, "n_blocks":  2, "resolution":   4},
+            {"channels": 512, "n_blocks":  2, "resolution":   8},
+            {"channels": 512, "n_blocks":  2, "resolution":  16},
+            {"channels": 512, "n_blocks":  2, "resolution":  32}]
+
 
         model = VAE(encoder_layers, decoder_layers)
+        transform = Compose((ToTensor(), Resize((32, 32))))
         dataset = CIFAR10("cifar10", download=True, transform=transform)
-        img_size = (32, 32)
 
     elif args.model == "VAE-celeba":
 #        encoder_layers = [
@@ -112,8 +128,8 @@ def main():
             {"channels": 512, "n_blocks":  2, "resolution": 128}]
         
         model = VAE(encoder_layers, decoder_layers)
+        transform = Compose((ToTensor(), Resize((128, 128))))
         dataset = CelebA("celeba", download=True, transform=transform)
-        img_size = (128, 128)
 
     else:
         model = torch.load(args.model)
@@ -158,7 +174,8 @@ def load_images(img_paths):
     """
     
     if img_paths != []:
-        transform = Compose((ToTensor(), Resize(IMG_SIZE), Normalize((0.5, 0.5, 0.5), (1, 1, 1))))
+        #transform = Compose((ToTensor(), Resize(IMG_SIZE), Normalize((0.5, 0.5, 0.5), (1, 1, 1))))
+        transform = Compose((ToTensor(), Resize((32, 32))))
         imgs = [transform(Image.open(path).convert("RGB")).unsqueeze(0) for path in img_paths]
         return torch.cat(imgs)
 
@@ -234,13 +251,13 @@ def reconstruct(model, img):
     model.eval()
     
     activations = model.encode(img)
-    return (model.decode(activations) + 0.5).clamp(0, 1)
+    return (model.decode(activations)).clamp(0, 1)
 
 
 def train(model,
           dataset,
           learning_rate=0.0001,
-          beta=0.1,
+          beta=1.0,
           epochs=50,
           batch_size=32):
     """
