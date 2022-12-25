@@ -11,15 +11,18 @@ from argparse import ArgumentParser
 from time import time
 
 import torch
+import numpy as np
+
 from torch.utils.data import DataLoader
-from torchvision.datasets import CelebA
-from torchvision.transforms import ToTensor, ToPILImage, Compose, Resize, RandomHorizontalFlip
+from torchvision.datasets import CelebA, CIFAR10
+from torchvision.transforms import ToTensor, ToPILImage, Compose, Resize, RandomHorizontalFlip, Normalize
 from PIL import Image
 
 
 from models import VAE
 
-IMG_SIZE = (128, 128)
+IMG_SIZE = (32, 32)
+#IMG_SIZE = (128, 128)
 GRAD_CLIP = 100
 
 def main():
@@ -38,7 +41,7 @@ def main():
     parser.add_argument("--batch-size", type=int, default=8, help="batch size")
 
     #pre-trained options
-    parser.add_argument("-m", "--model", default="VAE", type=str)
+    parser.add_argument("-m", "--model", default="VAE-cifar10", type=str)
 
     #experiment options
     parser.add_argument("--reconstruct", type=str, default=[], nargs="+", help="encode/decode an image")
@@ -49,22 +52,59 @@ def main():
 
     args = parser.parse_args()
 
-    model = None
+    transform = Compose((ToTensor(), Resize(IMG_SIZE), Normalize((0.5, 0.5, 0.5), (1, 1, 1))))
 
-    if args.model == "VAE":
-        model = VAE()
+    if args.model == "VAE-cifar10":
+        encoder_layers = [
+            {"channels": 512, "n_blocks": 11, "resolution":  32},
+            {"channels": 512, "n_blocks":  6, "resolution":  16},
+            {"channels": 512, "n_blocks":  6, "resolution":   8},
+            {"channels": 512, "n_blocks":  3, "resolution":   4, "n_downsamples": 2},
+            {"channels": 512, "n_blocks":  3, "resolution":   1, "n_downsamples": 0}]
+
+        decoder_layers = [
+            {"channels": 512, "n_blocks":  1, "resolution":   1, "upsample_ratio": 0},
+            {"channels": 512, "n_blocks":  2, "resolution":   4, "upsample_ratio": 4},
+            {"channels": 512, "n_blocks":  5, "resolution":   8},
+            {"channels": 512, "n_blocks": 10, "resolution":  16},
+            {"channels": 512, "n_blocks": 21, "resolution":  32}]
+
+        model = VAE(encoder_layers, decoder_layers)
+        dataset = CIFAR10("cifar10", download=True, transform=transform)
+
+
+    elif args.model == "VAE-celeba":
+        encoder_layers = [
+            {"channels": 512, "n_blocks":  3, "resolution": 128},
+            {"channels": 512, "n_blocks":  8, "resolution":  64},
+            {"channels": 512, "n_blocks": 12, "resolution":  32},
+            {"channels": 512, "n_blocks": 17, "resolution":  16},
+            {"channels": 512, "n_blocks":  7, "resolution":   8},
+            {"channels": 512, "n_blocks":  5, "resolution":   4, "n_downsamples": 2},
+            {"channels": 512, "n_blocks":  4, "resolution":   1, "n_downsamples": 0}]   
+
+        decoder_layers = [
+            {"channels": 512, "n_blocks":  2, "resolution":   1, "upsample_ratio": 0},
+            {"channels": 512, "n_blocks":  3, "resolution":   4, "upsample_ratio": 4},
+            {"channels": 512, "n_blocks":  4, "resolution":   8},
+            {"channels": 512, "n_blocks":  9, "resolution":  16},
+            {"channels": 512, "n_blocks": 21, "resolution":  32},
+            {"channels": 512, "n_blocks": 13, "resolution":  64, "bias": False},
+            {"channels": 512, "n_blocks":  7, "resolution": 128, "bias": False}]
+
+        model = VAE(encoder_layers, decoder_layers)
+        dataset = CelebA("celeba", download=True, transform=transform)
 
     else:
         model = torch.load(args.model)
 
     if args.train:
-        imgs = load_images(args.reconstruct + args.interpolate)
         model = train(model=model,
+                      dataset=dataset,
                       learning_rate=args.learning_rate,
                       beta=args.beta,
                       epochs=args.iterations,
-                      batch_size=args.batch_size,
-                      imgs=imgs)
+                      batch_size=args.batch_size)
 
     if args.reconstruct != []:
         imgs = load_images(args.reconstruct)
@@ -98,8 +138,8 @@ def load_images(img_paths):
     """
     
     if img_paths != []:
-        transform = Compose((ToTensor(), Resize(IMG_SIZE)))
-        imgs = [transform(Image.open(path).convert("RGB")).unsqueeze(0) for path in img_paths]
+        transform = Compose((ToTensor(), Resize(IMG_SIZE)), Normalize((0.5, 0.5, 0.5), (1, 1, 1)))
+        imgs = [transform(Image.open(path).convert("RGB")).unsqueeze(0) + 0.5 for path in img_paths]
         return torch.cat(imgs)
 
 
@@ -178,20 +218,17 @@ def reconstruct(model, img):
 
 
 def train(model,
+          dataset,
           learning_rate=0.0001,
           beta=0.1,
           epochs=50,
-          batch_size=32,
-          imgs=None):
+          batch_size=32):
     """
     Train the model using supplied hyperparameters.
     """
 
     start_time = int(time())
 
-    #use random horizontal flip to augment the dataset
-    transform = Compose((ToTensor(), Resize(IMG_SIZE), RandomHorizontalFlip()))
-    dataset = CelebA("celeba", download=True, transform=transform)
     dataloader = DataLoader(dataset,
                             batch_size=batch_size,
                             shuffle=True,
@@ -218,12 +255,8 @@ def train(model,
         for batch, _ in dataloader:
             samples += batch.shape[0]
 
-            if imgs is not None:
-                batch = torch.cat((batch, imgs))
-
             if torch.cuda.is_available():
                 batch = batch.cuda()
-
             
             loss, loss_kl, loss_recon =  train_step(model, optimizer, beta, batch, scaler)
             samples_sec = samples / (time() - epoch_start)
@@ -237,37 +270,43 @@ def train_step(model, optimizer, beta, batch, scaler):
     """
     Take one training step for a given batch of data.
     """
-   
-    #auto mixed precision
-    with torch.cuda.amp.autocast():
+  
+    try:
+        #auto mixed precision
+        with torch.cuda.amp.autocast():
 
-        #project the sample to the latent dimensional space
-        model.encode(batch)
+            #project the sample to the latent dimensional space
+            activations = model.encode(batch)
+            
+            #reconstruct the original sample from the latent dimension representation
+            batch_prime = model.decode(activations)
 
-        #reconstruct the original sample from the latent dimension representation
-        batch_prime = model.decode()
+            #get the KL divergence loss from the model
+            loss_kl = model.get_loss_kl().mean()
 
-        #get the KL divergence loss from the model
-        loss_kl = model.get_loss_kl().mean()
+            #calculate the reconstruction loss
+            loss_recon = torch.nn.functional.mse_loss(batch_prime, batch)
+            
+            #sum the losses
+            loss = (beta * loss_kl) + loss_recon
 
-        #calculate the reconstruction loss
-        loss_recon = torch.nn.functional.mse_loss(batch_prime, batch)
-        
-        #sum the losses
-        loss = (beta * loss_kl) + loss_recon
+        #train the model
+        scaler.scale(loss).backward()
 
-    #train the model
-    scaler.scale(loss).backward()
+        #take an optimization step using the scaled gradients
+        scaler.step(optimizer)
 
-    #take an optimization step using the scaled gradients
-    scaler.step(optimizer)
+        #update the scaler paramters
+        scaler.update()
+       
+        optimizer.zero_grad()
+       
+        return loss.item(), loss_kl.item(), loss_recon.item()
 
-    #update the scaler paramters
-    scaler.update()
-   
-    optimizer.zero_grad()
-   
-    return loss.item(), loss_kl.item(), loss_recon.item()
+    except ValueError:
+        #the decoder may sporadically throw a value error when creating the p distribution
+        #if this happens abort the training step
+        return np.inf, np.inf, np.inf
 
 
 if __name__ == "__main__":
