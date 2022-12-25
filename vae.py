@@ -21,8 +21,6 @@ from PIL import Image
 
 from models import VAE
 
-#IMG_SIZE = (32, 32)
-IMG_SIZE = (128, 128)
 GRAD_CLIP = 100
 
 def main():
@@ -52,8 +50,8 @@ def main():
 
     args = parser.parse_args()
 
-    #transform = Compose((ToTensor(), Resize(IMG_SIZE), Normalize((0.5, 0.5, 0.5), (1, 1, 1))))
-    transform = Compose((ToTensor(), Resize(IMG_SIZE)))
+    #transform = Compose((ToTensor(), Resize(img_size), Normalize((0.5, 0.5, 0.5), (1, 1, 1))))
+    transform = Compose((ToTensor(), Resize(img_size)))
 
     if args.model == "VAE-cifar10":
         encoder_layers = [
@@ -72,7 +70,7 @@ def main():
 
         model = VAE(encoder_layers, decoder_layers)
         dataset = CIFAR10("cifar10", download=True, transform=transform)
-
+        img_size = (32, 32)
 
     elif args.model == "VAE-celeba":
 #        encoder_layers = [
@@ -115,6 +113,7 @@ def main():
         
         model = VAE(encoder_layers, decoder_layers)
         dataset = CelebA("celeba", download=True, transform=transform)
+        img_size = (128, 128)
 
     else:
         model = torch.load(args.model)

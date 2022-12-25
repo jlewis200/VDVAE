@@ -1,5 +1,11 @@
-data
+celeba
+cifar10
+checkpoints
+imgs
+out
+*jpg
 *~
 *swp
 *swo
 **__pycache__
+
