@@ -12,6 +12,7 @@ from torch import nn
 from torch.distributions.kl import kl_divergence
 from torch.distributions.beta import Beta
 from torch.distributions.categorical import Categorical
+from torch.distributions import Normal
 from torch.nn.functional import log_softmax
 from torch import logsumexp, sigmoid, tanh
 
@@ -107,7 +108,7 @@ class Decoder(nn.Module):
         self.bias = nn.Parameter(torch.zeros((1, 512, 1, 1)))
 
         self.out_conv = nn.Conv2d(512, 3, kernel_size=3, padding=1)
-        self.beta_net = BetaNet(10)
+        self.beta_net = BetaNet(1)
 
     def forward(self, activations, target):
         """
@@ -157,7 +158,31 @@ class Decoder(nn.Module):
         tensor = self.beta_net.sample(tensor)
 
         return tensor
+ 
+    def reconstruct(self, activations):
+        """
+        Perform a forward pass through the decoder.
+        """
+
+        tensor = torch.zeros_like(activations[self.decoder_groups[0].resolution], requires_grad=True)
+
+        if torch.cuda.is_available():
+            tensor = tensor.cuda()
+
+        for decoder_group in self.decoder_groups:
+            tensor = decoder_group(tensor, activations[decoder_group.resolution])
+
+        tensor = tensor * self.gain + self.bias
         
+        #return tensor
+        
+        #return self.out_conv(tensor)
+
+        tensor = self.beta_net.sample(tensor)
+
+        return tensor
+
+       
     def get_loss_kl(self):
         """
         Collect the KL divergence loss from all groups.
@@ -342,7 +367,7 @@ class DecoderBlock(nn.Module):
         p_mean, p_logvar, res = torch.tensor_split(theta, (self.z_channels, 2 * self.z_channels), dim=1)
 
         #get p = N(p_mean, p_std)
-        p_dist = torch.distributions.Normal(p_mean, torch.exp(p_logvar / 2))
+        p_dist = Normal(p_mean, torch.exp(p_logvar / 2))
 
         #join the output from theta with the main branch
         tensor = tensor + res
@@ -351,7 +376,7 @@ class DecoderBlock(nn.Module):
         q_mean, q_logvar = self.phi(torch.cat((tensor, activations), dim=1)).chunk(2, dim=1)
  
         #get q = N(q_mean, q_std)
-        q_dist = torch.distributions.Normal(q_mean, torch.exp(q_logvar / 2))
+        q_dist = Normal(q_mean, torch.exp(q_logvar / 2))
 
         #get reparameterized sample from N(q_mean, q_std)
         z_rsample = q_dist.rsample()
@@ -389,7 +414,7 @@ class DecoderBlock(nn.Module):
         p_logvar = p_logvar + torch.full_like(p_logvar, math.log(temp))
 
         #get p = N(p_mean, p_std)
-        p_dist = torch.distributions.Normal(p_mean, torch.exp(p_logvar / 2))
+        p_dist = Normal(p_mean, torch.exp(p_logvar / 2))
 
         #get reparameterized sample from N(p_mean, p_std)
         z_rsample = p_dist.rsample()
@@ -456,64 +481,39 @@ class BetaNet(nn.Module):
         self.n_mixtures = n_mixtures
         self.link_scaler = link_scaler #used to scale the output of the link function
 
-        #convs for generating beta parameters for the red sub-pixel
-        self.beta_r_0 = nn.Conv2d(512, n_mixtures, 1)
-        self.beta_r_1 = nn.Conv2d(512, n_mixtures, 1)
+        #convs for generating dist parameters for the red sub-pixel
+        self.dist_r_0 = nn.Conv2d(512, n_mixtures, 1)
+        self.dist_r_1 = nn.Conv2d(512, n_mixtures, 1)
         
-        #convs for generating beta parameters for the green sub-pixel
-        self.beta_g_0 = nn.Conv2d(512, n_mixtures, 1)
-        self.beta_g_1 = nn.Conv2d(512, n_mixtures, 1)
+        #convs for generating dist parameters for the green sub-pixel
+        self.dist_g_0 = nn.Conv2d(512, n_mixtures, 1)
+        self.dist_g_1 = nn.Conv2d(512, n_mixtures, 1)
         
-        #convs for generating beta parameters for the blue sub-pixel
-        self.beta_b_0 = nn.Conv2d(512, n_mixtures, 1)
-        self.beta_b_1 = nn.Conv2d(512, n_mixtures, 1)
+        #convs for generating dist parameters for the blue sub-pixel
+        self.dist_b_0 = nn.Conv2d(512, n_mixtures, 1)
+        self.dist_b_1 = nn.Conv2d(512, n_mixtures, 1)
 
         #conv for generating the mixture score
         self.mix_score = nn.Conv2d(512, n_mixtures, 1)
 
     def link(self, tensor):
-        #link function between the parameter conv output and the beta distributions
+        #link function between the parameter conv output and the dist distributions
         #input range (-inf, inf), output range (0, link_scaler)
         #self.link = lambda x: self.link_scaler * sigmoid(x)
         #self.link = lambda x: tanh(x)
-        return 1 + (0.5 * sigmoid(tensor))
+        #return 1 + (0.2 * sigmoid(tensor))
+        return tensor
 
     def forward(self, dec_out, target):
         """
-        Find the negative log likelihood of the target given a mixture of beta distributions
+        Find the negative log likelihood of the target given a mixture of dist distributions
         parameterized by the output of the decoder net.
         """
        
-        CLAMP = (-10, 1)
+        CLAMP = (-100, 100)
 
-        #scale/center target a bit
-        target = (target * 0.9) + 0.05
-
-        #beta parameters for the red sub-pixel distributions
-        #shape N x n_mixtures x H x W
-        beta_r_0 = self.link(self.beta_r_0(dec_out))
-        beta_r_1 = self.link(self.beta_r_1(dec_out))
+        dist_r, dist_g, dist_b, log_prob_mix = self.get_distributions(dec_out)
         
-        #beta parameters for the blue sub-pixel distributions
-        #shape N x n_mixtures x H x W
-        beta_g_0 = self.link(self.beta_g_0(dec_out))
-        beta_g_1 = self.link(self.beta_g_1(dec_out))
- 
-        #beta parameters for the green sub-pixel distributions
-        #shape N x n_mixtures x H x W
-        beta_b_0 = self.link(self.beta_b_0(dec_out))
-        beta_b_1 = self.link(self.beta_b_1(dec_out))
- 
-        #log probability of each mixture for each distribution
-        #shape N x n_mixtures x H x W
-        log_prob_mix = log_softmax(self.mix_score(dec_out), dim=1)
-
-        #initialize the distributions
-        #shape N x n_mixtures x H x W
-        beta_r = Beta(beta_r_0, beta_r_1, validate_args=True)
-        beta_g = Beta(beta_g_0, beta_g_1, validate_args=True)
-        beta_b = Beta(beta_b_0, beta_b_1, validate_args=True)
-
         #the Betas generate samples of shape N x n_mixtures x H x W
         #expand/repeat the target tensor along the singleton color channels, maintain 4 dimensions
         #shape N x n_mixtures x H x W
@@ -521,11 +521,11 @@ class BetaNet(nn.Module):
         target_g = target[:, 1:2].expand(-1, self.n_mixtures, -1, -1)
         target_b = target[:, 2:3].expand(-1, self.n_mixtures, -1, -1)
 
-        #get the log probabilities of the target given the betas with current parameters
+        #get the log probabilities of the target given the dists with current parameters
         #shape N x n_mixtures x H x W
-        log_prob_r = beta_r.log_prob(target_r)
-        log_prob_g = beta_g.log_prob(target_g)
-        log_prob_b = beta_b.log_prob(target_b)
+        log_prob_r = dist_r.log_prob(target_r)
+        log_prob_g = dist_g.log_prob(target_g)
+        log_prob_b = dist_b.log_prob(target_b)
         
         #clamp inf values
         log_prob_r = log_prob_r.clamp(*CLAMP)
@@ -538,7 +538,7 @@ class BetaNet(nn.Module):
 
         log_prob = log_prob.clamp(*CLAMP)
         
-        #exponentiate, sum, take log along the dimension of each beta
+        #exponentiate, sum, take log along the dimension of each dist
         #shape N x H x W
         log_prob = logsumexp(log_prob, dim=1)
 
@@ -557,26 +557,56 @@ class BetaNet(nn.Module):
 
     def sample(self, dec_out):
         """
-        Sample from a mixture of beta distributions
+        Sample from a mixture of dist distributions
         parameterized by the output of the decoder net.
         """
-
-        CLAMP = (-10, 1)
-
-        #beta parameters for the red sub-pixel distributions
-        #shape N x n_mixtures x H x W
-        beta_r_0 = self.link(self.beta_r_0(dec_out))
-        beta_r_1 = self.link(self.beta_r_1(dec_out))
         
-        #beta parameters for the blue sub-pixel distributions
+        CLAMP = (-10, 1)
+        dist_r, dist_g, dist_b, log_prob_mix = self.get_distributions(dec_out)
+        
+        #choose 1 of n_mixtures distributions based on their log probabilities
+        indexes = Categorical(logits=log_prob_mix.permute(0, 2, 3, 1)).sample()
+
+        #get the color channels based on the indexes
+        color_r = dist_r.sample()
+        color_g = dist_g.sample()
+        color_b = dist_b.sample()
+
+
+        #TODO figure out this indexing
+        indexes2 = torch.zeros_like(color_r)
+        for idx in range(color_r.shape[2]):
+            for jdx in range(color_r.shape[3]):
+                channel = indexes[0, idx, jdx]
+                indexes2[0, channel, idx, jdx] = 1.0
+
+        color_r = (color_r * indexes2).sum(dim=1)
+        color_g = (color_g * indexes2).sum(dim=1)
+        color_b = (color_b * indexes2).sum(dim=1)
+        #breakpoint()
+        #stack the color channels
+        img = torch.cat((color_r, color_g, color_b), dim=0).unsqueeze(0)
+        #img = img.mean(dim=1, keepdim=True).expand(-1, 3, -1, -1)
+        return img
+
+    def get_distributions(self, dec_out):
+        """
+        """
+
+        #dist parameters for the red sub-pixel distributions
         #shape N x n_mixtures x H x W
-        beta_g_0 = self.link(self.beta_g_0(dec_out))
-        beta_g_1 = self.link(self.beta_g_1(dec_out))
+        dist_r_0 = self.link(self.dist_r_0(dec_out))
+        dist_r_1 = self.link(self.dist_r_1(dec_out))
+        
+        #dist parameters for the blue sub-pixel distributions
+        #shape N x n_mixtures x H x W
+        dist_g_0 = self.link(self.dist_g_0(dec_out))
+        dist_g_1 = self.link(self.dist_g_1(dec_out))
  
-        #beta parameters for the green sub-pixel distributions
+        #dist parameters for the green sub-pixel distributions
         #shape N x n_mixtures x H x W
-        beta_b_0 = self.link(self.beta_b_0(dec_out))
-        beta_b_1 = self.link(self.beta_b_1(dec_out))
+        dist_b_0 = self.link(self.dist_b_0(dec_out))
+        dist_b_1 = self.link(self.dist_b_1(dec_out))
  
         #log probability of each mixture for each distribution
         #shape N x n_mixtures x H x W
@@ -584,18 +614,12 @@ class BetaNet(nn.Module):
 
         #initialize the distributions
         #shape N x n_mixtures x H x W
-        beta_r = Beta(beta_r_0, beta_r_1, validate_args=True)
-        beta_g = Beta(beta_g_0, beta_g_1, validate_args=True)
-        beta_b = Beta(beta_b_0, beta_b_1, validate_args=True)
+        #dist_r = Beta(dist_r_0, dist_r_1, validate_args=True)
+        #dist_g = Beta(dist_g_0, dist_g_1, validate_args=True)
+        #dist_b = Beta(dist_b_0, dist_b_1, validate_args=True)
 
-        #choose 1 of n_mixtures distributions based on their log probabilities
-        indexes = Categorical(logits=log_prob_mix.permute(0, 2, 3, 1)).sample()
+        dist_r = Normal(dist_r_0, torch.exp(dist_r_1 / 2), validate_args=True)
+        dist_g = Normal(dist_g_0, torch.exp(dist_g_1 / 2), validate_args=True)
+        dist_b = Normal(dist_b_0, torch.exp(dist_b_1 / 2), validate_args=True)
 
-        #get the color channels based on the indexes
-        color_r = torch.take(beta_r.sample().permute(0, 2, 3, 1), indexes)
-        color_g = torch.take(beta_g.sample().permute(0, 2, 3, 1), indexes)
-        color_b = torch.take(beta_b.sample().permute(0, 2, 3, 1), indexes)
-
-        #stack the color channels
-        img = torch.cat((color_r, color_g, color_b), dim=0)
-        return img
+        return dist_r, dist_g, dist_b, log_prob_mix
