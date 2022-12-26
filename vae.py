@@ -105,6 +105,7 @@ def main():
         transform = Compose((ToTensor(), Resize((32, 32))))
         dataset = CIFAR10("cifar10", download=True, transform=transform)
 
+
     elif args.model == "VAE-celeba":
 #        encoder_layers = [
 #            {"channels": 512, "n_blocks":  3, "resolution": 128},
@@ -152,6 +153,12 @@ def main():
         model = torch.load(args.model)
 
     if args.train:
+        #TODO:  unhack this
+        transform = Compose((ToTensor(), Resize((32, 32))))
+        dataset = CIFAR10("cifar10", download=True, transform=transform)
+
+
+
         model = train(model=model,
                       dataset=dataset,
                       learning_rate=args.learning_rate,
@@ -268,8 +275,9 @@ def reconstruct(model, img):
     model.eval()
     
     activations = model.encode(img)
-    return (model.decode(activations)).clamp(0, 1)
+    #return (model.decode(activations)).clamp(0, 1)
 
+    return model.decoder.reconstruct(activations)
 
 def train(model,
           dataset,
