@@ -9,6 +9,11 @@ import math
 import numpy as np
 
 from torch import nn
+from torch.distributions.kl import kl_divergence
+from torch.distributions.beta import Beta
+from torch.distributions.categorical import Categorical
+from torch.nn.functional import log_softmax
+from torch import logsumexp, sigmoid, tanh
 
 
 class VAE(nn.Module):
@@ -29,12 +34,12 @@ class VAE(nn.Module):
     
         return self.encoder.forward(tensor)
 
-    def decode(self, tensor=None):
+    def decode(self, tensor=None, target=None):
         """
         Pass latent encoding tensor through the decoder.
         """
 
-        return self.decoder.forward(tensor)
+        return self.decoder.forward(tensor, target=target)
 
     def sample(self, n_samples, temp=1.0):
         """
@@ -42,6 +47,8 @@ class VAE(nn.Module):
         """
 
         return self.decoder.sample(n_samples, temp)
+        #px_z = self.decoder.sample(n_samples, temp)
+        #return self.decoder.dmol_net.sample(px_z)
 
     def get_loss_kl(self):
         """
@@ -100,8 +107,9 @@ class Decoder(nn.Module):
         self.bias = nn.Parameter(torch.zeros((1, 512, 1, 1)))
 
         self.out_conv = nn.Conv2d(512, 3, kernel_size=3, padding=1)
+        self.beta_net = BetaNet(10)
 
-    def forward(self, activations):
+    def forward(self, activations, target):
         """
         Perform a forward pass through the decoder.
         """
@@ -114,9 +122,15 @@ class Decoder(nn.Module):
         for decoder_group in self.decoder_groups:
             tensor = decoder_group(tensor, activations[decoder_group.resolution])
 
-        #tensor = tensor * self.gain + self.bias
+        tensor = tensor * self.gain + self.bias
         
-        return self.out_conv(tensor)
+        #return tensor
+        
+        #return self.out_conv(tensor)
+
+        tensor = self.beta_net(tensor, target)
+
+        return tensor
 
     def sample(self, n_samples, temp=1.0):
         """
@@ -134,9 +148,15 @@ class Decoder(nn.Module):
         for decoder_group in self.decoder_groups:
             tensor = decoder_group.sample(tensor, temp=temp)
  
-        #tensor = tensor * self.gain + self.bias
+        tensor = tensor * self.gain + self.bias
         
-        return self.out_conv(tensor)       
+        #return tensor
+
+        #return self.out_conv(tensor)       
+
+        tensor = self.beta_net.sample(tensor)
+
+        return tensor
         
     def get_loss_kl(self):
         """
@@ -186,7 +206,7 @@ class EncoderGroup(nn.Module):
         for _ in range(n_blocks):
             self.encoder_blocks.append(Block(channels, mid_channels, channels, mid_kernel=mid_kernel))
         
-        #self.encoder_blocks[-1].weight.data *= np.sqrt(1 / n_blocks)
+        #self.encoder_blocks[-1].weight.data *= (1 / n_blocks)**0.5
        
     def forward(self, tensor):
         """
@@ -235,6 +255,7 @@ class DecoderGroup(nn.Module):
         """
         Perform the forward pass through this group.
         """
+
         #upsample the output of the previous decoder group
         tensor = nn.functional.interpolate(tensor, scale_factor=self.upsample_ratio)
       
@@ -336,7 +357,13 @@ class DecoderBlock(nn.Module):
         z_rsample = q_dist.rsample()
 
         #calculate the KL divergence between p and q
-        self.loss_kl = q_dist.log_prob(z_rsample) - p_dist.log_prob(z_rsample)
+        #I'm not conviced this is actually correct
+        #log_prob() returns the log of PDF(distribution|sample)
+        #this will minimize the difference between log_prob, but that could be accomplished by 
+        #learning hyperparameters which make z_sample very improbable
+        #unless there's something I'm missing here
+        #self.loss_kl = (q_dist.log_prob(z_rsample) - p_dist.log_prob(z_rsample)).abs()
+        self.loss_kl = kl_divergence(p_dist, q_dist)
 
         #project z to the proper dimensions and join with main branch
         tensor = tensor + self.z_projection(z_rsample)
@@ -416,3 +443,159 @@ class Block(nn.Sequential):
         return out_tensor
 
 
+class BetaNet(nn.Module):
+    """
+    The output of the encoder is fed to the BetaNet.  Here the probability distribution of a
+    pixel's value is modeled by a mixture of Beta distributions parameterized by the output
+    of the decoder.
+    """
+
+    def __init__(self, n_mixtures, link_scaler=2):
+        super().__init__()
+
+        self.n_mixtures = n_mixtures
+        self.link_scaler = link_scaler #used to scale the output of the link function
+
+        #convs for generating beta parameters for the red sub-pixel
+        self.beta_r_0 = nn.Conv2d(512, n_mixtures, 1)
+        self.beta_r_1 = nn.Conv2d(512, n_mixtures, 1)
+        
+        #convs for generating beta parameters for the green sub-pixel
+        self.beta_g_0 = nn.Conv2d(512, n_mixtures, 1)
+        self.beta_g_1 = nn.Conv2d(512, n_mixtures, 1)
+        
+        #convs for generating beta parameters for the blue sub-pixel
+        self.beta_b_0 = nn.Conv2d(512, n_mixtures, 1)
+        self.beta_b_1 = nn.Conv2d(512, n_mixtures, 1)
+
+        #conv for generating the mixture score
+        self.mix_score = nn.Conv2d(512, n_mixtures, 1)
+
+    def link(self, tensor):
+        #link function between the parameter conv output and the beta distributions
+        #input range (-inf, inf), output range (0, link_scaler)
+        #self.link = lambda x: self.link_scaler * sigmoid(x)
+        #self.link = lambda x: tanh(x)
+        return 1 + (0.5 * sigmoid(tensor))
+
+    def forward(self, dec_out, target):
+        """
+        Find the negative log likelihood of the target given a mixture of beta distributions
+        parameterized by the output of the decoder net.
+        """
+       
+        CLAMP = (-10, 1)
+
+        #scale/center target a bit
+        target = (target * 0.9) + 0.05
+
+        #beta parameters for the red sub-pixel distributions
+        #shape N x n_mixtures x H x W
+        beta_r_0 = self.link(self.beta_r_0(dec_out))
+        beta_r_1 = self.link(self.beta_r_1(dec_out))
+        
+        #beta parameters for the blue sub-pixel distributions
+        #shape N x n_mixtures x H x W
+        beta_g_0 = self.link(self.beta_g_0(dec_out))
+        beta_g_1 = self.link(self.beta_g_1(dec_out))
+ 
+        #beta parameters for the green sub-pixel distributions
+        #shape N x n_mixtures x H x W
+        beta_b_0 = self.link(self.beta_b_0(dec_out))
+        beta_b_1 = self.link(self.beta_b_1(dec_out))
+ 
+        #log probability of each mixture for each distribution
+        #shape N x n_mixtures x H x W
+        log_prob_mix = log_softmax(self.mix_score(dec_out), dim=1)
+
+        #initialize the distributions
+        #shape N x n_mixtures x H x W
+        beta_r = Beta(beta_r_0, beta_r_1, validate_args=True)
+        beta_g = Beta(beta_g_0, beta_g_1, validate_args=True)
+        beta_b = Beta(beta_b_0, beta_b_1, validate_args=True)
+
+        #the Betas generate samples of shape N x n_mixtures x H x W
+        #expand/repeat the target tensor along the singleton color channels, maintain 4 dimensions
+        #shape N x n_mixtures x H x W
+        target_r = target[:, 0:1].expand(-1, self.n_mixtures, -1, -1)
+        target_g = target[:, 1:2].expand(-1, self.n_mixtures, -1, -1)
+        target_b = target[:, 2:3].expand(-1, self.n_mixtures, -1, -1)
+
+        #get the log probabilities of the target given the betas with current parameters
+        #shape N x n_mixtures x H x W
+        log_prob_r = beta_r.log_prob(target_r)
+        log_prob_g = beta_g.log_prob(target_g)
+        log_prob_b = beta_b.log_prob(target_b)
+        
+        #clamp inf values
+        log_prob_r = log_prob_r.clamp(*CLAMP)
+        log_prob_g = log_prob_g.clamp(*CLAMP)
+        log_prob_b = log_prob_b.clamp(*CLAMP)
+        
+        #sum the log probabilities of each color channel and modify by the softmax of the  mixture score
+        #shape N x n_mixtures x H x W
+        log_prob = log_prob_r + log_prob_g + log_prob_b + log_prob_mix
+
+        log_prob = log_prob.clamp(*CLAMP)
+        
+        #exponentiate, sum, take log along the dimension of each beta
+        #shape N x H x W
+        log_prob = logsumexp(log_prob, dim=1)
+
+        #clamp inf values
+        log_prob = log_prob.clamp(*CLAMP)
+
+        #scale by the number of elements per batch item
+        #shape N
+        log_prob = log_prob.sum(dim=(1, 2)) / target[0].numel()
+
+        #clamp inf values
+        log_prob = log_prob.clamp(*CLAMP)
+
+        #return the negation of the log likelihood suitable for minimization
+        return -log_prob
+
+    def sample(self, dec_out):
+        """
+        Sample from a mixture of beta distributions
+        parameterized by the output of the decoder net.
+        """
+
+        CLAMP = (-10, 1)
+
+        #beta parameters for the red sub-pixel distributions
+        #shape N x n_mixtures x H x W
+        beta_r_0 = self.link(self.beta_r_0(dec_out))
+        beta_r_1 = self.link(self.beta_r_1(dec_out))
+        
+        #beta parameters for the blue sub-pixel distributions
+        #shape N x n_mixtures x H x W
+        beta_g_0 = self.link(self.beta_g_0(dec_out))
+        beta_g_1 = self.link(self.beta_g_1(dec_out))
+ 
+        #beta parameters for the green sub-pixel distributions
+        #shape N x n_mixtures x H x W
+        beta_b_0 = self.link(self.beta_b_0(dec_out))
+        beta_b_1 = self.link(self.beta_b_1(dec_out))
+ 
+        #log probability of each mixture for each distribution
+        #shape N x n_mixtures x H x W
+        log_prob_mix = log_softmax(self.mix_score(dec_out), dim=1)
+
+        #initialize the distributions
+        #shape N x n_mixtures x H x W
+        beta_r = Beta(beta_r_0, beta_r_1, validate_args=True)
+        beta_g = Beta(beta_g_0, beta_g_1, validate_args=True)
+        beta_b = Beta(beta_b_0, beta_b_1, validate_args=True)
+
+        #choose 1 of n_mixtures distributions based on their log probabilities
+        indexes = Categorical(logits=log_prob_mix.permute(0, 2, 3, 1)).sample()
+
+        #get the color channels based on the indexes
+        color_r = torch.take(beta_r.sample().permute(0, 2, 3, 1), indexes)
+        color_g = torch.take(beta_g.sample().permute(0, 2, 3, 1), indexes)
+        color_b = torch.take(beta_b.sample().permute(0, 2, 3, 1), indexes)
+
+        #stack the color channels
+        img = torch.cat((color_r, color_g, color_b), dim=0)
+        return img
