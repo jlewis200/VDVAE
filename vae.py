@@ -35,7 +35,7 @@ def main():
     parser.add_argument("-t", "--train", action="store_true", help="train the model")
     parser.add_argument("-b", "--beta", type=float, default=1, help="relative weight of KL divergence loss")
     parser.add_argument("-l", "--learning-rate", type=float, default=0.0001, help="learning rate of optimizer")
-    parser.add_argument("-i", "--iterations", type=int, default=10, help="number of training iterations")
+    parser.add_argument("-i", "--iterations", type=int, default=50, help="number of training iterations")
     parser.add_argument("--batch-size", type=int, default=8, help="batch size")
 
     #pre-trained options
@@ -67,6 +67,22 @@ def main():
 #            {"channels": 512, "n_blocks": 10, "resolution":  16},
 #            {"channels": 512, "n_blocks": 21, "resolution":  32}]
 
+#        encoder_layers = [
+#            {"channels": 512, "n_blocks":  9, "resolution":  32},
+#            {"channels": 512, "n_blocks":  9, "resolution":  16},
+#            {"channels": 512, "n_blocks":  6, "resolution":   8},
+#            {"channels": 512, "n_blocks":  6, "resolution":   4},
+#            {"channels": 512, "n_blocks":  3, "resolution":   2},
+#            {"channels": 512, "n_blocks":  3, "resolution":   1, "n_downsamples": 0}]
+#
+#        decoder_layers = [
+#            {"channels": 512, "n_blocks":  3, "resolution":   1, "upsample_ratio": 1},
+#            {"channels": 512, "n_blocks":  3, "resolution":   2},
+#            {"channels": 512, "n_blocks":  6, "resolution":   4},
+#            {"channels": 512, "n_blocks":  6, "resolution":   8},
+#            {"channels": 512, "n_blocks":  9, "resolution":  16},
+#            {"channels": 512, "n_blocks":  9, "resolution":  32}]
+
         encoder_layers = [
             {"channels": 512, "n_blocks":  2, "resolution":  32},
             {"channels": 512, "n_blocks":  2, "resolution":  16},
@@ -82,6 +98,7 @@ def main():
             {"channels": 512, "n_blocks":  2, "resolution":   8},
             {"channels": 512, "n_blocks":  2, "resolution":  16},
             {"channels": 512, "n_blocks":  2, "resolution":  32}]
+
 
 
         model = VAE(encoder_layers, decoder_layers)
@@ -206,7 +223,7 @@ def sample(model, n_samples, temp=1.0):
         model = model.cuda()
 
     for _ in range(n_samples):
-        imgs.append((model.sample(1, temp=temp) + 0.5).clamp(0, 1))
+        imgs.append((model.sample(1, temp=temp)).clamp(0, 1))
 
     return imgs
 
@@ -282,10 +299,7 @@ def train(model,
     #optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate, betas=(0.9, 0.9))
 
-    for epoch in range(epochs):
-        #save the model weights
-        torch.save(model, f"checkpoints/model_{start_time}_{epoch}")
-
+    for epoch in range(1, epochs + 1):
         epoch_start = time()
         samples = 0
 
@@ -295,10 +309,13 @@ def train(model,
             if torch.cuda.is_available():
                 batch = batch.cuda()
             
-            loss, loss_kl, loss_recon =  train_step(model, optimizer, beta, batch, scaler)
+            loss, loss_kl, loss_nll =  train_step(model, optimizer, beta, batch, scaler)
             samples_sec = samples / (time() - epoch_start)
 
-            print(f"{epoch} {samples_sec:.2e} {loss:.2e} {loss_kl:.2e} {loss_recon:.2e}")
+            print(f"{epoch} {samples_sec:.2e} {loss:.2e} {loss_kl:.2e} {loss_nll:.2e}")
+
+        #save the model weights
+        torch.save(model, f"checkpoints/model_{start_time}_{epoch}")
 
     return model
 
@@ -310,22 +327,24 @@ def train_step(model, optimizer, beta, batch, scaler):
   
     try:
         #auto mixed precision
-        with torch.cuda.amp.autocast():
+        #with torch.cuda.amp.autocast():
+        if True:
 
             #project the sample to the latent dimensional space
             activations = model.encode(batch)
             
             #reconstruct the original sample from the latent dimension representation
-            batch_prime = model.decode(activations)
+            #batch_prime = model.decode(activations)
+            loss_nll = model.decode(activations, batch).mean()
 
             #get the KL divergence loss from the model
             loss_kl = model.get_loss_kl().mean()
 
             #calculate the reconstruction loss
-            loss_recon = torch.nn.functional.mse_loss(batch_prime, batch)
+            #loss_recon = torch.nn.functional.mse_loss(batch_prime, batch)
             
             #sum the losses
-            loss = (beta * loss_kl) + loss_recon
+            loss = (beta * loss_kl) + loss_nll
 
         #train the model
         scaler.scale(loss).backward()
@@ -338,7 +357,7 @@ def train_step(model, optimizer, beta, batch, scaler):
        
         optimizer.zero_grad()
        
-        return loss.item(), loss_kl.item(), loss_recon.item()
+        return loss.item(), loss_kl.item(), loss_nll.item()
 
     except ValueError:
         #the decoder may sporadically throw a value error when creating the p distribution
