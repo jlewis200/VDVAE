@@ -67,44 +67,12 @@ def main():
             {"channels": 384, "n_blocks": 11, "resolution":  16},
             {"channels": 384, "n_blocks": 22, "resolution":  32}]
 
-#        encoder_layers = [
-#            {"channels": 512, "n_blocks":  9, "resolution":  32},
-#            {"channels": 512, "n_blocks":  9, "resolution":  16},
-#            {"channels": 512, "n_blocks":  6, "resolution":   8},
-#            {"channels": 512, "n_blocks":  6, "resolution":   4},
-#            {"channels": 512, "n_blocks":  3, "resolution":   2},
-#            {"channels": 512, "n_blocks":  3, "resolution":   1}]
-#
-#        decoder_layers = [
-#            {"channels": 512, "n_blocks":  3, "resolution":   1},
-#            {"channels": 512, "n_blocks":  3, "resolution":   2},
-#            {"channels": 512, "n_blocks":  6, "resolution":   4},
-#            {"channels": 512, "n_blocks":  6, "resolution":   8},
-#            {"channels": 512, "n_blocks":  9, "resolution":  16},
-#            {"channels": 512, "n_blocks":  9, "resolution":  32}]
-
-#        encoder_layers = [
-#            {"channels": 512, "n_blocks":  2, "resolution":  32},
-#            {"channels": 512, "n_blocks":  2, "resolution":  16},
-#            {"channels": 512, "n_blocks":  2, "resolution":   8},
-#            {"channels": 512, "n_blocks":  2, "resolution":   4},
-#            {"channels": 512, "n_blocks":  2, "resolution":   2},
-#            {"channels": 512, "n_blocks":  2, "resolution":   1}]
-#
-#        decoder_layers = [
-#            {"channels": 512, "n_blocks":  2, "resolution":   1},
-#            {"channels": 512, "n_blocks":  2, "resolution":   2},
-#            {"channels": 512, "n_blocks":  2, "resolution":   4},
-#            {"channels": 512, "n_blocks":  2, "resolution":   8},
-#            {"channels": 512, "n_blocks":  2, "resolution":  16},
-#            {"channels": 512, "n_blocks":  2, "resolution":  32}]
-
         model = VAE(encoder_layers, decoder_layers)
         model.dataset = CIFAR10
         model.dataset_kwargs = {"root": "cifar10", 
                                 "download": True, 
                                 "transform": Compose((ToTensor(), Resize((32, 32))))}
-        transfer_weights(model)
+#        transfer_weights(model)
 
     elif args.config == "celeba":
 #        encoder_layers = [
