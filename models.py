@@ -197,12 +197,10 @@ class EncoderGroup(nn.Module):
                  channels,
                  resolution,
                  n_blocks,
-                 downsample_ratio=2,
                  final_scale=1):
         super().__init__()
 
         self.resolution = resolution
-        self.downsample_ratio = downsample_ratio
 
         #ratio per VDVAE
         mid_channels = channels // 4
@@ -221,15 +219,16 @@ class EncoderGroup(nn.Module):
         Perform the forward pass through the convolution module.  Store the activations.
         """
 
+        #downsample if necessary
+        if tensor.shape[-1] != self.resolution:
+            kernel_size = tensor.shape[-1] // self.resolution
+            tensor = nn.functional.avg_pool2d(tensor, kernel_size)
+ 
         tensor = self.encoder_blocks.forward(tensor)
         
         #store the activations
         self.activations = tensor
-        
-        #downsample
-        if self.downsample_ratio > 0:
-            tensor = nn.functional.avg_pool2d(tensor, self.downsample_ratio)
-        
+       
         return tensor
 
 

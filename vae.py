@@ -88,7 +88,7 @@ def main():
             {"channels": 512, "n_blocks":  2, "resolution":   8},
             {"channels": 512, "n_blocks":  2, "resolution":   4},
             {"channels": 512, "n_blocks":  2, "resolution":   2},
-            {"channels": 512, "n_blocks":  2, "resolution":   1, "downsample_ratio": 0}]
+            {"channels": 512, "n_blocks":  2, "resolution":   1}]
 
         decoder_layers = [
             {"channels": 512, "n_blocks":  2, "resolution":   1},
@@ -314,10 +314,10 @@ def train(model,
             if torch.cuda.is_available():
                 batch = batch.cuda()
             
-            loss, loss_kl, loss_nll =  train_step(model, optimizer, beta, batch, scaler)
+            loss, loss_kl, loss_nll, grad_norm =  train_step(model, optimizer, beta, batch, scaler)
             samples_sec = samples / (time() - epoch_start)
 
-            print(f"{model.epoch.item()} {samples_sec:.2e} {loss:.2e} {loss_kl:.2e} {loss_nll:.2e}")
+            print(f"{model.epoch.item()} {samples_sec:.2e} {grad_norm:.2e} {loss:.2e} {loss_kl:.2e} {loss_nll:.2e}")
 
         #save the model weights
         torch.save({"model_state_dict": model.state_dict(),
@@ -355,21 +355,30 @@ def train_step(model, optimizer, beta, batch, scaler):
 
         #train the model
         scaler.scale(loss).backward()
+    
+        #unscale to apply gradient clipping
+        scaler.unscale_(optimizer)
+
+        #find the gradient norm
+        grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), GRAD_CLIP)
         
-        #take an optimization step using the scaled gradients
-        scaler.step(optimizer)
+        #take the optimizer step if gradients are under control
+        if grad_norm < GRAD_CLIP:
+
+            #take an optimization step using the gradient scaler
+            scaler.step(optimizer)
 
         #update the scaler paramters
         scaler.update()
        
         optimizer.zero_grad()
        
-        return loss.item(), loss_kl.item(), loss_nll.item()
+        return loss.item(), loss_kl.item(), loss_nll.item(), grad_norm.item()
 
     except ValueError:
         #the decoder may sporadically throw a value error when creating the p distribution
         #if this happens abort the training step
-        return np.inf, np.inf, np.inf
+        return np.inf, np.inf, np.inf, np.inf
 
 
 if __name__ == "__main__":
