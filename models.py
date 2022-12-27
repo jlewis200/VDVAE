@@ -59,7 +59,7 @@ class Encoder(nn.Module):
     def __init__(self, layers):
         super().__init__()
 
-        self.in_conv = nn.Conv2d(3, 512, kernel_size=3, padding=1)
+        self.in_conv = nn.Conv2d(3, layers[0]["channels"], kernel_size=3, padding=1)
 
         #get the total number of blocks for weight scaling
         n_blocks = sum(layer["n_blocks"] for layer in layers)
@@ -109,11 +109,12 @@ class Decoder(nn.Module):
         for layer in layers:
             self.decoder_groups.append(DecoderGroup(final_scale=final_scale, **layer))
 
-        self.gain = nn.Parameter(torch.ones((1, 512, 1, 1)))
-        self.bias = nn.Parameter(torch.zeros((1, 512, 1, 1)))
+        channels = layers[-1]["channels"]
+        self.gain = nn.Parameter(torch.ones((1, channels, 1, 1)))
+        self.bias = nn.Parameter(torch.zeros((1, channels, 1, 1)))
 
-        self.out_conv = nn.Conv2d(512, 3, kernel_size=3, padding=1)
-        self.mixture_net = MixtureNet(10)
+        self.out_conv = nn.Conv2d(channels, 3, kernel_size=3, padding=1)
+        self.mixture_net = MixtureNet(10, channels)
 
     def forward(self, activations=None, temp=1):
         """
@@ -426,26 +427,26 @@ class MixtureNet(nn.Module):
     pixel's value is modeled by a mixture of distributions parameterized by the decoder output.
     """
 
-    def __init__(self, n_mixtures, link_scaler=2):
+    def __init__(self, n_mixtures, channels, link_scaler=2):
         super().__init__()
 
         self.n_mixtures = n_mixtures
         self.link_scaler = link_scaler #used to scale the output of the link function
 
         #convs for generating dist parameters for the red sub-pixel
-        self.dist_r_0 = nn.Conv2d(512, n_mixtures, 1)
-        self.dist_r_1 = nn.Conv2d(512, n_mixtures, 1)
+        self.dist_r_0 = nn.Conv2d(channels, n_mixtures, 1)
+        self.dist_r_1 = nn.Conv2d(channels, n_mixtures, 1)
         
         #convs for generating dist parameters for the green sub-pixel
-        self.dist_g_0 = nn.Conv2d(512, n_mixtures, 1)
-        self.dist_g_1 = nn.Conv2d(512, n_mixtures, 1)
+        self.dist_g_0 = nn.Conv2d(channels, n_mixtures, 1)
+        self.dist_g_1 = nn.Conv2d(channels, n_mixtures, 1)
         
         #convs for generating dist parameters for the blue sub-pixel
-        self.dist_b_0 = nn.Conv2d(512, n_mixtures, 1)
-        self.dist_b_1 = nn.Conv2d(512, n_mixtures, 1)
+        self.dist_b_0 = nn.Conv2d(channels, n_mixtures, 1)
+        self.dist_b_1 = nn.Conv2d(channels, n_mixtures, 1)
 
         #conv for generating the mixture score
-        self.mix_score = nn.Conv2d(512, n_mixtures, 1)
+        self.mix_score = nn.Conv2d(channels, n_mixtures, 1)
 
     def link(self, tensor):
         #link function between the parameter conv output and the dist distributions

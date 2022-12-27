@@ -20,6 +20,7 @@ from PIL import Image
 
 
 from models import VAE
+from weight_mapper import transfer_weights
 
 GRAD_CLIP = 100
 
@@ -52,19 +53,19 @@ def main():
     args = parser.parse_args()
 
     if args.config == "cifar10":
-#        encoder_layers = [
-#            {"channels": 512, "n_blocks": 11, "resolution":  32},
-#            {"channels": 512, "n_blocks":  6, "resolution":  16},
-#            {"channels": 512, "n_blocks":  6, "resolution":   8},
-#            {"channels": 512, "n_blocks":  3, "resolution":   4, "downsample_ratio": 2},
-#            {"channels": 512, "n_blocks":  3, "resolution":   1, "downsample_ratio": 0}]
-#
-#        decoder_layers = [
-#            {"channels": 512, "n_blocks":  1, "resolution":   1, "upsample_ratio": 0},
-#            {"channels": 512, "n_blocks":  2, "resolution":   4, "upsample_ratio": 4},
-#            {"channels": 512, "n_blocks":  5, "resolution":   8},
-#            {"channels": 512, "n_blocks": 10, "resolution":  16},
-#            {"channels": 512, "n_blocks": 21, "resolution":  32}]
+        encoder_layers = [
+            {"channels": 384, "n_blocks": 12, "resolution":  32},
+            {"channels": 384, "n_blocks":  7, "resolution":  16},
+            {"channels": 384, "n_blocks":  7, "resolution":   8},
+            {"channels": 384, "n_blocks":  4, "resolution":   4},
+            {"channels": 384, "n_blocks":  3, "resolution":   1}]
+
+        decoder_layers = [
+            {"channels": 384, "n_blocks":  1, "resolution":   1},
+            {"channels": 384, "n_blocks":  3, "resolution":   4},
+            {"channels": 384, "n_blocks":  6, "resolution":   8},
+            {"channels": 384, "n_blocks": 11, "resolution":  16},
+            {"channels": 384, "n_blocks": 22, "resolution":  32}]
 
 #        encoder_layers = [
 #            {"channels": 512, "n_blocks":  9, "resolution":  32},
@@ -72,37 +73,38 @@ def main():
 #            {"channels": 512, "n_blocks":  6, "resolution":   8},
 #            {"channels": 512, "n_blocks":  6, "resolution":   4},
 #            {"channels": 512, "n_blocks":  3, "resolution":   2},
-#            {"channels": 512, "n_blocks":  3, "resolution":   1, "downsample_ratio": 0}]
+#            {"channels": 512, "n_blocks":  3, "resolution":   1}]
 #
 #        decoder_layers = [
-#            {"channels": 512, "n_blocks":  3, "resolution":   1, "upsample_ratio": 1},
+#            {"channels": 512, "n_blocks":  3, "resolution":   1},
 #            {"channels": 512, "n_blocks":  3, "resolution":   2},
 #            {"channels": 512, "n_blocks":  6, "resolution":   4},
 #            {"channels": 512, "n_blocks":  6, "resolution":   8},
 #            {"channels": 512, "n_blocks":  9, "resolution":  16},
 #            {"channels": 512, "n_blocks":  9, "resolution":  32}]
 
-        encoder_layers = [
-            {"channels": 512, "n_blocks":  2, "resolution":  32},
-            {"channels": 512, "n_blocks":  2, "resolution":  16},
-            {"channels": 512, "n_blocks":  2, "resolution":   8},
-            {"channels": 512, "n_blocks":  2, "resolution":   4},
-            {"channels": 512, "n_blocks":  2, "resolution":   2},
-            {"channels": 512, "n_blocks":  2, "resolution":   1}]
-
-        decoder_layers = [
-            {"channels": 512, "n_blocks":  2, "resolution":   1},
-            {"channels": 512, "n_blocks":  2, "resolution":   2},
-            {"channels": 512, "n_blocks":  2, "resolution":   4},
-            {"channels": 512, "n_blocks":  2, "resolution":   8},
-            {"channels": 512, "n_blocks":  2, "resolution":  16},
-            {"channels": 512, "n_blocks":  2, "resolution":  32}]
+#        encoder_layers = [
+#            {"channels": 512, "n_blocks":  2, "resolution":  32},
+#            {"channels": 512, "n_blocks":  2, "resolution":  16},
+#            {"channels": 512, "n_blocks":  2, "resolution":   8},
+#            {"channels": 512, "n_blocks":  2, "resolution":   4},
+#            {"channels": 512, "n_blocks":  2, "resolution":   2},
+#            {"channels": 512, "n_blocks":  2, "resolution":   1}]
+#
+#        decoder_layers = [
+#            {"channels": 512, "n_blocks":  2, "resolution":   1},
+#            {"channels": 512, "n_blocks":  2, "resolution":   2},
+#            {"channels": 512, "n_blocks":  2, "resolution":   4},
+#            {"channels": 512, "n_blocks":  2, "resolution":   8},
+#            {"channels": 512, "n_blocks":  2, "resolution":  16},
+#            {"channels": 512, "n_blocks":  2, "resolution":  32}]
 
         model = VAE(encoder_layers, decoder_layers)
         model.dataset = CIFAR10
         model.dataset_kwargs = {"root": "cifar10", 
                                 "download": True, 
                                 "transform": Compose((ToTensor(), Resize((32, 32))))}
+        transfer_weights(model)
 
     elif args.config == "celeba":
 #        encoder_layers = [
@@ -304,6 +306,10 @@ def train(model,
     scaler = torch.cuda.amp.GradScaler()
 
     for _ in range(epochs):
+        #print column headers
+        print(f"{'':>9} {'sample/':>9} {'gradient':>9} {'overall':>9} {'KL':>9} {'mixture':>9}")
+        print(f"{'epoch':>9} {'sec':>9} {'norm':>9} {'loss':>9} {'div':>9} {'NLL':>9}") 
+
         model.epoch += 1
         epoch_start = time()
         samples = 0
@@ -317,7 +323,7 @@ def train(model,
             loss, loss_kl, loss_nll, grad_norm =  train_step(model, optimizer, beta, batch, scaler)
             samples_sec = samples / (time() - epoch_start)
 
-            print(f"{model.epoch.item()} {samples_sec:.2e} {grad_norm:.2e} {loss:.2e} {loss_kl:.2e} {loss_nll:.2e}")
+            print(f"{model.epoch.item():9} {samples_sec: 9.2e} {grad_norm: 9.2e} {loss: 9.2e} {loss_kl: 9.2e} {loss_nll: 9.2e}")
 
         #save the model weights
         torch.save({"model_state_dict": model.state_dict(),
@@ -378,7 +384,7 @@ def train_step(model, optimizer, beta, batch, scaler):
     except ValueError:
         #the decoder may sporadically throw a value error when creating the p distribution
         #if this happens abort the training step
-        return np.inf, np.inf, np.inf, np.inf
+        return torch.inf, torch.inf, torch.inf, torch.inf
 
 
 if __name__ == "__main__":
