@@ -34,12 +34,13 @@ def main():
     # options
     parser.add_argument("-t", "--train", action="store_true", help="train the model")
     parser.add_argument("-b", "--beta", type=float, default=1, help="relative weight of KL divergence loss")
-    parser.add_argument("-l", "--learning-rate", type=float, default=0.0001, help="learning rate of optimizer")
+    parser.add_argument("-l", "--learning-rate", type=float, default=0.00015, help="learning rate of optimizer")
     parser.add_argument("-i", "--iterations", type=int, default=50, help="number of training iterations")
-    parser.add_argument("--batch-size", type=int, default=8, help="batch size")
+    parser.add_argument("-n", "--batch-size", type=int, default=8, help="batch size")
 
     #pre-trained options
-    parser.add_argument("-m", "--model", default="VAE-cifar10", type=str)
+    parser.add_argument("--checkpoint", type=str)
+    parser.add_argument("--config", default="cifar10", type=str)
 
     #experiment options
     parser.add_argument("--reconstruct", type=str, default=[], nargs="+", help="encode/decode an image")
@@ -50,9 +51,9 @@ def main():
 
     args = parser.parse_args()
 
-    #transform = Compose((ToTensor(), Resize(img_size), Normalize((0.5, 0.5, 0.5), (1, 1, 1))))
+    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate, betas=(0.9, 0.9))
 
-    if args.model == "VAE-cifar10":
+    if args.config == "cifar10":
 #        encoder_layers = [
 #            {"channels": 512, "n_blocks": 11, "resolution":  32},
 #            {"channels": 512, "n_blocks":  6, "resolution":  16},
@@ -99,14 +100,13 @@ def main():
             {"channels": 512, "n_blocks":  2, "resolution":  16},
             {"channels": 512, "n_blocks":  2, "resolution":  32}]
 
-
-
         model = VAE(encoder_layers, decoder_layers)
-        transform = Compose((ToTensor(), Resize((32, 32))))
-        dataset = CIFAR10("cifar10", download=True, transform=transform)
+        model.dataset = CIFAR10
+        model.dataset_kwargs = {"root":"cifar10", 
+                                 download=True, 
+                                 transform=Compose((ToTensor(), Resize((32, 32))))}
 
-
-    elif args.model == "VAE-celeba":
+    elif args.config == "celeba":
 #        encoder_layers = [
 #            {"channels": 512, "n_blocks":  3, "resolution": 128},
 #            {"channels": 512, "n_blocks":  8, "resolution":  64},
@@ -146,21 +146,22 @@ def main():
             {"channels": 512, "n_blocks":  2, "resolution": 128}]
         
         model = VAE(encoder_layers, decoder_layers)
-        transform = Compose((ToTensor(), Resize((128, 128))))
-        dataset = CelebA("celeba", download=True, transform=transform)
+        model.dataset = CelebA
+        model.dataset_kwargs = {"root":"celeba", 
+                                 download=True, 
+                                 transform=Compose((ToTensor(), Resize((128, 128))))}
 
-    else:
-        model = torch.load(args.model)
+    if args.checkpoint is not None:
+        checkpoint = torch.load(args.checkpoint)
+        model.load_state_dict(checkpoint["model_state_dict"])
+        optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
 
     if args.train:
-        #TODO:  unhack this
-        transform = Compose((ToTensor(), Resize((32, 32))))
-        dataset = CIFAR10("cifar10", download=True, transform=transform)
-
-
-
+        #load the dataset only if training
+        model.dataset = model.dataset(**model.dataset_kwargs)
+        
         model = train(model=model,
-                      dataset=dataset,
+                      optimizer=optimizer,
                       learning_rate=args.learning_rate,
                       beta=args.beta,
                       epochs=args.iterations,
@@ -280,7 +281,7 @@ def reconstruct(model, img):
     return model.decoder.reconstruct(activations)
 
 def train(model,
-          dataset,
+          optimizer,
           learning_rate=0.0001,
           beta=1.0,
           epochs=50,
@@ -291,7 +292,7 @@ def train(model,
 
     start_time = int(time())
 
-    dataloader = DataLoader(dataset,
+    dataloader = DataLoader(model.dataset,
                             batch_size=batch_size,
                             shuffle=True,
                             num_workers=2,
@@ -301,13 +302,8 @@ def train(model,
     if torch.cuda.is_available():
         model = model.cuda()
 
-    #use mixed-precision loss/gradient scaler
-    scaler = torch.cuda.amp.GradScaler()
-
-    #optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
-    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate, betas=(0.9, 0.9))
-
-    for epoch in range(1, epochs + 1):
+    for _ in range(epochs):
+        model.epoch += 1
         epoch_start = time()
         samples = 0
 
@@ -320,10 +316,12 @@ def train(model,
             loss, loss_kl, loss_nll =  train_step(model, optimizer, beta, batch, scaler)
             samples_sec = samples / (time() - epoch_start)
 
-            print(f"{epoch} {samples_sec:.2e} {loss:.2e} {loss_kl:.2e} {loss_nll:.2e}")
+            print(f"{model.epoch.item()} {samples_sec:.2e} {loss:.2e} {loss_kl:.2e} {loss_nll:.2e}")
 
         #save the model weights
-        torch.save(model, f"checkpoints/model_{start_time}_{epoch}")
+        torch.save({"model_state_dict": model.state_dict(),
+                    "optimizer_state_dict": optimizer.state_dict()}, 
+                    f"checkpoints/model_{start_time}_{model.epoch.item()}")
 
     return model
 

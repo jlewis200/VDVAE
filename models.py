@@ -28,6 +28,9 @@ class VAE(nn.Module):
 
         self.encoder = Encoder(encoder_layers)
         self.decoder = Decoder(decoder_layers)
+        
+        #register the training epoch so it is saved with the model's state_dict
+        self.register_buffer(torch.tensor([0], dtype=int))
 
     def encode(self, tensor):
         """
@@ -463,13 +466,13 @@ class Block(nn.Sequential):
 
         padding = 0 if mid_kernel == 1 else 1
 
-        self.append(GELU6())
+        self.append(GELU())
         self.append(nn.Conv2d(in_channels, mid_channels, 1))
-        self.append(GELU6())
+        self.append(GELU())
         self.append(nn.Conv2d(mid_channels, mid_channels, mid_kernel, padding=padding))
-        self.append(GELU6())
+        self.append(GELU())
         self.append(nn.Conv2d(mid_channels, mid_channels, mid_kernel, padding=padding))
-        self.append(GELU6())
+        self.append(GELU())
         self.append(nn.Conv2d(mid_channels, out_channels, 1))
 
         self[-1].weight.data *= final_scale
@@ -529,7 +532,7 @@ class MixtureNet(nn.Module):
         parameterized by the output of the decoder net.
         """
        
-        CLAMP = (-100, 100)
+        CLAMP = (-torch.inf, torch.inf)
 
         dist_r, dist_g, dist_b, log_prob_mix = self.get_distributions(dec_out)
         
@@ -580,7 +583,6 @@ class MixtureNet(nn.Module):
         parameterized by the output of the decoder net.
         """
         
-        CLAMP = (-10, 1)
         dist_r, dist_g, dist_b, log_prob_mix = self.get_distributions(dec_out)
         
         #choose 1 of n_mixtures distributions based on their log probabilities
@@ -653,7 +655,7 @@ class MixtureNet(nn.Module):
 
 class GELU6(nn.GELU):
     """
-    This non-linearity combines the GELU profile with a limiting function to keep constrain the
+    This non-linearity combines the GELU profile with a clamp function to constrain the
     output to 6 or less, similar to the ReLU6 non-linearity.
     """
 
