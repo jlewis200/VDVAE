@@ -91,7 +91,7 @@ def main():
             {"channels": 512, "n_blocks":  2, "resolution":   1, "downsample_ratio": 0}]
 
         decoder_layers = [
-            {"channels": 512, "n_blocks":  2, "resolution":   1, "upsample_ratio": 1},
+            {"channels": 512, "n_blocks":  2, "resolution":   1},
             {"channels": 512, "n_blocks":  2, "resolution":   2},
             {"channels": 512, "n_blocks":  2, "resolution":   4},
             {"channels": 512, "n_blocks":  2, "resolution":   8},
@@ -282,10 +282,7 @@ def reconstruct(model, img):
 
     model.eval()
     
-    activations = model.encode(img)
-    #return (model.decode(activations)).clamp(0, 1)
-
-    return model.decoder.reconstruct(activations)
+    return model.reconstruct(img)
 
 def train(model,
           optimizer,
@@ -344,7 +341,8 @@ def train_step(model, optimizer, beta, batch, scaler):
             
             #reconstruct the original sample from the latent dimension representation
             #batch_prime = model.decode(activations)
-            loss_nll = model.decode(activations, batch).mean()
+            tensor = model.decode(activations)
+            loss_nll = model.get_nll(tensor, batch).mean()
 
             #get the KL divergence loss from the model
             loss_kl = model.get_loss_kl().mean()
