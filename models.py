@@ -239,8 +239,8 @@ class EncoderGroup(nn.Module):
         
         self.encoder_blocks = nn.Sequential()
 
-        #use a (3, 3) kernel if the resolution > 1
-        mid_kernel = 3 if resolution > 1 else 1
+        #use a (3, 3) kernel if the resolution > 2
+        mid_kernel = 3 if resolution > 2 else 1
         
         for _ in range(n_blocks):
             self.encoder_blocks.append(Block(channels, mid_channels, channels, mid_kernel=mid_kernel, final_scale=final_scale))
@@ -358,8 +358,8 @@ class DecoderBlock(nn.Module):
         #z_channels fixed at 16
         self.z_channels = 16
      
-        #use a (3, 3) kernel if the resolution > 1
-        mid_kernel = 3 if resolution > 1 else 1
+        #use a (3, 3) kernel if the resolution > 2
+        mid_kernel = 3 if resolution > 2 else 1
 
         #block ratios from VDVAE
         self.phi = Block(channels * 2, mid_channels, 2 * self.z_channels, mid_kernel=mid_kernel)
@@ -609,7 +609,6 @@ class MixtureNet(nn.Module):
         color_b = (color_b * indexes2).sum(dim=1)
         #these are now shaped N x 1 x H x W
 
-        breakpoint()
         #stack the color channels
         img = torch.cat((color_r, color_g, color_b), dim=0).unsqueeze(0)
         #shape N x 3 x H x W
