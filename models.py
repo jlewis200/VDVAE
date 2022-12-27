@@ -9,6 +9,7 @@ import math
 import numpy as np
 
 from torch import nn
+from torch.nn import GELU
 from torch.distributions.kl import kl_divergence
 from torch.distributions.beta import Beta
 from torch.distributions.categorical import Categorical
@@ -68,10 +69,16 @@ class Encoder(nn.Module):
 
         self.in_conv = nn.Conv2d(3, 512, kernel_size=3, padding=1)
 
+        #get the total number of blocks for weight scaling
+        n_blocks = sum(layer["n_blocks"] for layer in layers)
+
+        #calculate the weight scaling factor
+        final_scale = (1 / n_blocks)**0.5
+
         self.encoder_groups = nn.Sequential()
 
         for layer in layers:
-            self.encoder_groups.append(EncoderGroup(**layer))
+            self.encoder_groups.append(EncoderGroup(final_scale=final_scale, **layer))
 
     def forward(self, tensor):
         """
@@ -100,15 +107,21 @@ class Decoder(nn.Module):
         super().__init__()
         
         self.decoder_groups = nn.ModuleList()
+        
+        #get the total number of blocks for weight scaling
+        n_blocks = sum(layer["n_blocks"] for layer in layers)
+
+        #calculate the weight scaling factor
+        final_scale = (1 / n_blocks)**0.5
 
         for layer in layers:
-            self.decoder_groups.append(DecoderGroup(**layer))
+            self.decoder_groups.append(DecoderGroup(final_scale=final_scale, **layer))
 
         self.gain = nn.Parameter(torch.ones((1, 512, 1, 1)))
         self.bias = nn.Parameter(torch.zeros((1, 512, 1, 1)))
 
         self.out_conv = nn.Conv2d(512, 3, kernel_size=3, padding=1)
-        self.beta_net = BetaNet(10)
+        self.mixture_net = MixtureNet(10)
 
     def forward(self, activations, target):
         """
@@ -129,7 +142,7 @@ class Decoder(nn.Module):
         
         #return self.out_conv(tensor)
 
-        tensor = self.beta_net(tensor, target)
+        tensor = self.mixture_net(tensor, target)
 
         return tensor
 
@@ -155,7 +168,7 @@ class Decoder(nn.Module):
 
         #return self.out_conv(tensor)       
 
-        tensor = self.beta_net.sample(tensor)
+        tensor = self.mixture_net.sample(tensor)
 
         return tensor
  
@@ -178,7 +191,7 @@ class Decoder(nn.Module):
         
         #return self.out_conv(tensor)
 
-        tensor = self.beta_net.sample(tensor)
+        tensor = self.mixture_net.sample(tensor)
 
         return tensor
 
@@ -214,11 +227,12 @@ class EncoderGroup(nn.Module):
                  channels,
                  resolution,
                  n_blocks,
-                 n_downsamples=1):
+                 downsample_ratio=2,
+                 final_scale=1):
         super().__init__()
 
         self.resolution = resolution
-        self.n_downsamples = n_downsamples
+        self.downsample_ratio = downsample_ratio
 
         #ratio per VDVAE
         mid_channels = channels // 4
@@ -229,9 +243,8 @@ class EncoderGroup(nn.Module):
         mid_kernel = 3 if resolution > 1 else 1
         
         for _ in range(n_blocks):
-            self.encoder_blocks.append(Block(channels, mid_channels, channels, mid_kernel=mid_kernel))
+            self.encoder_blocks.append(Block(channels, mid_channels, channels, mid_kernel=mid_kernel, final_scale=final_scale))
         
-        #self.encoder_blocks[-1].weight.data *= (1 / n_blocks)**0.5
        
     def forward(self, tensor):
         """
@@ -244,8 +257,8 @@ class EncoderGroup(nn.Module):
         self.activations = tensor
         
         #downsample
-        for _ in range(self.n_downsamples):
-            tensor = nn.functional.avg_pool2d(tensor, 2)
+        if self.downsample_ratio > 0:
+            tensor = nn.functional.avg_pool2d(tensor, self.downsample_ratio)
         
         return tensor
 
@@ -260,7 +273,8 @@ class DecoderGroup(nn.Module):
                  n_blocks,
                  resolution,
                  bias=True,
-                 upsample_ratio=2):
+                 upsample_ratio=2,
+                 final_scale=1):
         super().__init__()
       
         self.upsample_ratio=upsample_ratio
@@ -269,7 +283,7 @@ class DecoderGroup(nn.Module):
         self.decoder_blocks = nn.ModuleList()
 
         for _ in range(n_blocks):
-            self.decoder_blocks.append(DecoderBlock(channels, resolution))
+            self.decoder_blocks.append(DecoderBlock(channels, resolution, final_scale))
         
         self.bias = None
         
@@ -334,7 +348,8 @@ class DecoderBlock(nn.Module):
 
     def __init__(self,
                  channels,
-                 resolution):
+                 resolution,
+                 final_scale):
         super().__init__()
 
         #mid_channels and z_channels ratios from VDVAE
@@ -350,7 +365,9 @@ class DecoderBlock(nn.Module):
         self.phi = Block(channels * 2, mid_channels, 2 * self.z_channels, mid_kernel=mid_kernel)
         self.theta = Block(channels, mid_channels, channels + (2 * self.z_channels), mid_kernel=mid_kernel)
         self.z_projection = nn.Conv2d(self.z_channels, channels, kernel_size=1)
-        self.res = Block(channels, mid_channels, channels, res=True, mid_kernel=mid_kernel)
+        self.res = Block(channels, mid_channels, channels, res=True, mid_kernel=mid_kernel, final_scale=final_scale)
+
+        self.z_projection.weight.data *= final_scale
 
     def forward(self, tensor, activations):
         """
@@ -438,22 +455,25 @@ class Block(nn.Sequential):
                  mid_channels,
                  out_channels,
                  res=False,
-                 mid_kernel=3):
+                 mid_kernel=3,
+                 final_scale=1):
         super().__init__()
 
         self.res = res
 
         padding = 0 if mid_kernel == 1 else 1
 
-        self.append(nn.GELU())
+        self.append(GELU6())
         self.append(nn.Conv2d(in_channels, mid_channels, 1))
-        self.append(nn.GELU())
+        self.append(GELU6())
         self.append(nn.Conv2d(mid_channels, mid_channels, mid_kernel, padding=padding))
-        self.append(nn.GELU())
+        self.append(GELU6())
         self.append(nn.Conv2d(mid_channels, mid_channels, mid_kernel, padding=padding))
-        self.append(nn.GELU())
+        self.append(GELU6())
         self.append(nn.Conv2d(mid_channels, out_channels, 1))
 
+        self[-1].weight.data *= final_scale
+            
     def forward(self, in_tensor):
         """
         Perform the forward pass through the convolution module.
@@ -468,11 +488,10 @@ class Block(nn.Sequential):
         return out_tensor
 
 
-class BetaNet(nn.Module):
+class MixtureNet(nn.Module):
     """
-    The output of the encoder is fed to the BetaNet.  Here the probability distribution of a
-    pixel's value is modeled by a mixture of Beta distributions parameterized by the output
-    of the decoder.
+    The output of the encoder is fed to the MixtureNet.  Here the probability distribution of a
+    pixel's value is modeled by a mixture of distributions parameterized by the decoder output.
     """
 
     def __init__(self, n_mixtures, link_scaler=2):
@@ -631,3 +650,13 @@ class BetaNet(nn.Module):
         dist_b = Normal(dist_b_0, torch.exp(dist_b_1 / 2), validate_args=True)
 
         return dist_r, dist_g, dist_b, log_prob_mix
+
+
+class GELU6(nn.GELU):
+    """
+    This non-linearity combines the GELU profile with a limiting function to keep constrain the
+    output to 6 or less, similar to the ReLU6 non-linearity.
+    """
+
+    def forward(self, tensor):
+        return super().forward(tensor).clamp(max=6)

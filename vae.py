@@ -57,8 +57,8 @@ def main():
 #            {"channels": 512, "n_blocks": 11, "resolution":  32},
 #            {"channels": 512, "n_blocks":  6, "resolution":  16},
 #            {"channels": 512, "n_blocks":  6, "resolution":   8},
-#            {"channels": 512, "n_blocks":  3, "resolution":   4, "n_downsamples": 2},
-#            {"channels": 512, "n_blocks":  3, "resolution":   1, "n_downsamples": 0}]
+#            {"channels": 512, "n_blocks":  3, "resolution":   4, "downsample_ratio": 2},
+#            {"channels": 512, "n_blocks":  3, "resolution":   1, "downsample_ratio": 0}]
 #
 #        decoder_layers = [
 #            {"channels": 512, "n_blocks":  1, "resolution":   1, "upsample_ratio": 0},
@@ -73,7 +73,7 @@ def main():
 #            {"channels": 512, "n_blocks":  6, "resolution":   8},
 #            {"channels": 512, "n_blocks":  6, "resolution":   4},
 #            {"channels": 512, "n_blocks":  3, "resolution":   2},
-#            {"channels": 512, "n_blocks":  3, "resolution":   1, "n_downsamples": 0}]
+#            {"channels": 512, "n_blocks":  3, "resolution":   1, "downsample_ratio": 0}]
 #
 #        decoder_layers = [
 #            {"channels": 512, "n_blocks":  3, "resolution":   1, "upsample_ratio": 1},
@@ -89,7 +89,7 @@ def main():
             {"channels": 512, "n_blocks":  2, "resolution":   8},
             {"channels": 512, "n_blocks":  2, "resolution":   4},
             {"channels": 512, "n_blocks":  2, "resolution":   2},
-            {"channels": 512, "n_blocks":  2, "resolution":   1, "n_downsamples": 0}]
+            {"channels": 512, "n_blocks":  2, "resolution":   1, "downsample_ratio": 0}]
 
         decoder_layers = [
             {"channels": 512, "n_blocks":  2, "resolution":   1, "upsample_ratio": 1},
@@ -113,8 +113,8 @@ def main():
 #            {"channels": 512, "n_blocks": 12, "resolution":  32},
 #            {"channels": 512, "n_blocks": 17, "resolution":  16},
 #            {"channels": 512, "n_blocks":  7, "resolution":   8},
-#            {"channels": 512, "n_blocks":  5, "resolution":   4, "n_downsamples": 2},
-#            {"channels": 512, "n_blocks":  4, "resolution":   1, "n_downsamples": 0}]   
+#            {"channels": 512, "n_blocks":  5, "resolution":   4, "downsample_ratio": 2},
+#            {"channels": 512, "n_blocks":  4, "resolution":   1, "downsample_ratio": 0}]   
 #
 #        decoder_layers = [
 #            {"channels": 512, "n_blocks":  2, "resolution":   1, "upsample_ratio": 0},
@@ -133,7 +133,7 @@ def main():
             {"channels": 512, "n_blocks":  2, "resolution":   8},
             {"channels": 512, "n_blocks":  2, "resolution":   4},
             {"channels": 512, "n_blocks":  2, "resolution":   2},
-            {"channels": 512, "n_blocks":  2, "resolution":   1, "n_downsamples": 0}]   
+            {"channels": 512, "n_blocks":  2, "resolution":   1, "downsample_ratio": 0}]   
 
         decoder_layers = [
             {"channels": 512, "n_blocks":  2, "resolution":   1, "upsample_ratio": 0},
