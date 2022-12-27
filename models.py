@@ -108,7 +108,7 @@ class Decoder(nn.Module):
         self.bias = nn.Parameter(torch.zeros((1, 512, 1, 1)))
 
         self.out_conv = nn.Conv2d(512, 3, kernel_size=3, padding=1)
-        self.beta_net = BetaNet(1)
+        self.beta_net = BetaNet(10)
 
     def forward(self, activations, target):
         """
@@ -374,7 +374,7 @@ class DecoderBlock(nn.Module):
 
         #get the mean/log-variance of q
         q_mean, q_logvar = self.phi(torch.cat((tensor, activations), dim=1)).chunk(2, dim=1)
- 
+
         #get q = N(q_mean, q_std)
         q_dist = Normal(q_mean, torch.exp(q_logvar / 2))
 
@@ -574,19 +574,27 @@ class BetaNet(nn.Module):
 
 
         #TODO figure out this indexing
+        #this creates a tensor shaped like the color samples:  N x n_mixtures x H x W
+        #assigns a value of 1 to the channel corresponding with the selected distribution
+        #all others are zero
         indexes2 = torch.zeros_like(color_r)
         for idx in range(color_r.shape[2]):
             for jdx in range(color_r.shape[3]):
                 channel = indexes[0, idx, jdx]
                 indexes2[0, channel, idx, jdx] = 1.0
 
+        #pointwise multiplies with the color samples and sums along the channels axis
+        #now all values are zeroed except those of the selected distributions
         color_r = (color_r * indexes2).sum(dim=1)
         color_g = (color_g * indexes2).sum(dim=1)
         color_b = (color_b * indexes2).sum(dim=1)
-        #breakpoint()
+        #these are now shaped N x 1 x H x W
+
+        breakpoint()
         #stack the color channels
         img = torch.cat((color_r, color_g, color_b), dim=0).unsqueeze(0)
-        #img = img.mean(dim=1, keepdim=True).expand(-1, 3, -1, -1)
+        #shape N x 3 x H x W
+
         return img
 
     def get_distributions(self, dec_out):
