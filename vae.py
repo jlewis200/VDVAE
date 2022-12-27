@@ -35,7 +35,7 @@ def main():
     parser.add_argument("-t", "--train", action="store_true", help="train the model")
     parser.add_argument("-b", "--beta", type=float, default=1, help="relative weight of KL divergence loss")
     parser.add_argument("-l", "--learning-rate", type=float, default=0.00015, help="learning rate of optimizer")
-    parser.add_argument("-i", "--iterations", type=int, default=50, help="number of training iterations")
+    parser.add_argument("-e", "--epochs", type=int, default=50, help="number of training epochs")
     parser.add_argument("-n", "--batch-size", type=int, default=8, help="batch size")
 
     #pre-trained options
@@ -50,8 +50,6 @@ def main():
     parser.add_argument("--temperature", type=float, default=1.0, help="temperature of random samples")
 
     args = parser.parse_args()
-
-    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate, betas=(0.9, 0.9))
 
     if args.config == "cifar10":
 #        encoder_layers = [
@@ -102,9 +100,9 @@ def main():
 
         model = VAE(encoder_layers, decoder_layers)
         model.dataset = CIFAR10
-        model.dataset_kwargs = {"root":"cifar10", 
-                                 download=True, 
-                                 transform=Compose((ToTensor(), Resize((32, 32))))}
+        model.dataset_kwargs = {"root": "cifar10", 
+                                "download": True, 
+                                "transform": Compose((ToTensor(), Resize((32, 32))))}
 
     elif args.config == "celeba":
 #        encoder_layers = [
@@ -147,10 +145,20 @@ def main():
         
         model = VAE(encoder_layers, decoder_layers)
         model.dataset = CelebA
-        model.dataset_kwargs = {"root":"celeba", 
-                                 download=True, 
-                                 transform=Compose((ToTensor(), Resize((128, 128))))}
+        model.dataset_kwargs = {"root": "celeba", 
+                                "download": True, 
+                                "transform": Compose((ToTensor(), Resize((128, 128))))}
 
+    else:
+        print("unsupported dataset")
+        return
+
+    #send model to cuda before initializing optimizer
+    if torch.cuda.is_available():
+        model = model.cuda()
+
+    optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate, betas=(0.9, 0.9))
+    
     if args.checkpoint is not None:
         checkpoint = torch.load(args.checkpoint)
         model.load_state_dict(checkpoint["model_state_dict"])
@@ -162,9 +170,8 @@ def main():
         
         model = train(model=model,
                       optimizer=optimizer,
-                      learning_rate=args.learning_rate,
                       beta=args.beta,
-                      epochs=args.iterations,
+                      epochs=args.epochs,
                       batch_size=args.batch_size)
 
     if args.reconstruct != []:
@@ -282,15 +289,12 @@ def reconstruct(model, img):
 
 def train(model,
           optimizer,
-          learning_rate=0.0001,
           beta=1.0,
           epochs=50,
           batch_size=32):
     """
     Train the model using supplied hyperparameters.
     """
-
-    start_time = int(time())
 
     dataloader = DataLoader(model.dataset,
                             batch_size=batch_size,
@@ -299,8 +303,8 @@ def train(model,
                             prefetch_factor=batch_size,
                             drop_last=True)
 
-    if torch.cuda.is_available():
-        model = model.cuda()
+    #use mixed-precision loss/gradient scaler
+    scaler = torch.cuda.amp.GradScaler()
 
     for _ in range(epochs):
         model.epoch += 1
@@ -321,7 +325,7 @@ def train(model,
         #save the model weights
         torch.save({"model_state_dict": model.state_dict(),
                     "optimizer_state_dict": optimizer.state_dict()}, 
-                    f"checkpoints/model_{start_time}_{model.epoch.item()}")
+                    f"checkpoints/model_{model.start_time.item()}_{model.epoch.item()}")
 
     return model
 
@@ -333,8 +337,7 @@ def train_step(model, optimizer, beta, batch, scaler):
   
     try:
         #auto mixed precision
-        #with torch.cuda.amp.autocast():
-        if True:
+        with torch.cuda.amp.autocast():
 
             #project the sample to the latent dimensional space
             activations = model.encode(batch)
@@ -354,7 +357,7 @@ def train_step(model, optimizer, beta, batch, scaler):
 
         #train the model
         scaler.scale(loss).backward()
-
+        
         #take an optimization step using the scaled gradients
         scaler.step(optimizer)
 

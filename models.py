@@ -16,7 +16,7 @@ from torch.distributions.categorical import Categorical
 from torch.distributions import Normal
 from torch.nn.functional import log_softmax
 from torch import logsumexp, sigmoid, tanh
-
+from time import time
 
 class VAE(nn.Module):
     """
@@ -29,8 +29,11 @@ class VAE(nn.Module):
         self.encoder = Encoder(encoder_layers)
         self.decoder = Decoder(decoder_layers)
         
-        #register the training epoch so it is saved with the model's state_dict
-        self.register_buffer(torch.tensor([0], dtype=int))
+        #register the training epoch and start time so it is saved with the model's state_dict
+        self.register_buffer("epoch", torch.tensor([0], dtype=int))
+
+        #the model is identified by the initial creation time
+        self.register_buffer("start_time", torch.tensor([int(time())], dtype=int))
 
     def encode(self, tensor):
         """
