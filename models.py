@@ -171,14 +171,14 @@ class Decoder(nn.Module):
         #return self.mixture_net.sample(tensor)
         return self.out_net.sample(tensor)
 
-    def reconstruct(self, activations):
+    def reconstruct(self, activations, temp=0):
         """
         Perform a forward pass through the decoder.
         """
         tensor = self.forward(activations=activations)
         
         #return self.mixture_net.sample(tensor)
-        return self.out_net.sample(tensor)
+        return self.out_net.sample(tensor, temp=temp)
  
     def get_nll(self, tensor, target):
         """
@@ -364,38 +364,36 @@ class DecoderBlock(nn.Module):
         during sampling z is drawn from the prior p(z).
  
         Note:  A ValueError during the creation of either normal distribution is a sign the 
-        learning rate is too high.  The mins/maxs of p_logvar have been observed to trend toward
-        inf/-inf when the LR is too high and training collapses.  The magnitude of the mean/logvar
+        learning rate is too high.  The mins/maxs of p_logstd have been observed to trend toward
+        inf/-inf when the LR is too high and training collapses.  The magnitude of the mean/logstd
         tend to increase as the tensor resolution increases.
         """      
 
         if activations is None:
             return self.sample(tensor, activations, temp)
              
-        #get the mean/log-variance of q
-        q_mean, q_logvar = self.phi(torch.cat((tensor, activations), dim=1)).chunk(2, dim=1)
+        #get the mean/log-standard-deviation of q
+        q_mean, q_logstd = self.phi(torch.cat((tensor, activations), dim=1)).chunk(2, dim=1)
 
         #get q = N(q_mean, q_std)
-        #q_dist = Normal(q_mean, torch.exp(q_logvar / 2))
+        q_dist = Normal(q_mean, torch.exp(q_logstd))
       
-        #get the mean, log-variance of p, and the residual flow to the main path
+        #get the mean, log-standard-deviation of p, and the residual flow to the main path
         theta = self.theta(tensor)
-        p_mean, p_logvar, res = torch.tensor_split(theta, (self.z_channels, 2 * self.z_channels), dim=1)
+        p_mean, p_logstd, res = torch.tensor_split(theta, (self.z_channels, 2 * self.z_channels), dim=1)
 
         #get p = N(p_mean, p_std)
-        #p_dist = Normal(p_mean, torch.exp(p_logvar / 2))
+        p_dist = Normal(p_mean, torch.exp(p_logstd))
 
         #join the output from theta with the main branch
         tensor = tensor + res
 
         #get reparameterized sample from N(q_mean, q_std)
-        #z_rsample = q_dist.rsample()
-        z_rsample = draw_gaussian_diag_samples(q_mean, q_logvar)
+        z_rsample = q_dist.rsample()
 
         #calculate the KL divergence between p and q
-        #self.loss_kl = kl_divergence(p_dist, q_dist)
-        self.loss_kl = gaussian_analytical_kl(q_mean, p_mean, q_logvar, p_logvar)
-
+        self.loss_kl = kl_divergence(q_dist, p_dist)
+        
         #project z to the proper dimensions and join with main branch
         tensor = tensor + self.z_projection(z_rsample)
 
@@ -412,45 +410,24 @@ class DecoderBlock(nn.Module):
         during sampling z is drawn from the prior p(z).
  
         Note:  A ValueError during the creation of either normal distribution is a sign the 
-        learning rate is too high.  The mins/maxs of p_logvar have been observed to trend toward
-        inf/-inf when the LR is too high and training collapses.  The magnitude of the mean/logvar
+        learning rate is too high.  The mins/maxs of p_logstd have been observed to trend toward
+        inf/-inf when the LR is too high and training collapses.  The magnitude of the mean/logstd
         tend to increase as the tensor resolution increases.
         """      
 
-        #get the mean, log-variance of p, and the residual flow to the main path
+        #get the mean, log-standard-deviation of p, and the residual flow to the main path
         theta = self.theta(tensor)
-        p_mean, p_logvar, res = torch.tensor_split(theta, (self.z_channels, 2 * self.z_channels), dim=1)
+        p_mean, p_logstd, res = torch.tensor_split(theta, (self.z_channels, 2 * self.z_channels), dim=1)
 
-        if activations is not None:
-            #non-None activations indicates training, build/sample z from q
-            
-            #get the mean/log-variance of q
-            q_mean, q_logvar = self.phi(torch.cat((tensor, activations), dim=1)).chunk(2, dim=1)
-
-            #get q = N(q_mean, q_std)
-            #q_dist = Normal(q_mean, torch.exp(q_logvar / 2))
-
-            #get reparameterized sample from N(q_mean, q_std)
-            #z_rsample = q_dist.rsample()
-            z_rsample = draw_gaussian_diag_samples(q_mean, q_logvar)
-
-            #calculate the KL divergence between p and q
-            #self.loss_kl = kl_divergence(p_dist, q_dist)
-            self.loss_kl = gaussian_analytical_kl(p_mean, q_mean, p_logvar, q_logvar)
-
-        else:
-            #None activations indicates sampling, sample z from p
-
-            #get p = N(p_mean, p_std)
-            #p_dist = Normal(p_mean, torch.exp(p_logvar / 2))
-
-            #get reparameterized sample from N(p_mean, p_std)
-            #z_rsample = p_dist.rsample()
-            z_rsample = draw_gaussian_diag_samples(p_mean, p_logvar)
+        #get p = N(p_mean, p_std)
+        p_dist = Normal(p_mean, temp * torch.exp(p_logstd))
 
         #join the output from theta with the main branch
         tensor = tensor + res
 
+        #get reparameterized sample from N(p_mean, p_std)
+        z_rsample = p_dist.rsample()
+        
         #project z to the proper dimensions and join with main branch
         tensor = tensor + self.z_projection(z_rsample)
 
@@ -458,7 +435,6 @@ class DecoderBlock(nn.Module):
         tensor = self.res(tensor)
 
         return tensor
-
 
 
 class Block(nn.Sequential):
