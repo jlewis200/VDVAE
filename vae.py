@@ -65,7 +65,7 @@ def main():
 
     if args.train:
         #load the dataset only if training
-        model.dataset = model.dataset(**model.dataset_kwargs)
+        model.dataset = model.get_dataset()
         
         model = train(model=model,
                       optimizer=optimizer,
@@ -130,22 +130,16 @@ def sample(model, n_samples, temp=1.0):
     Get a number of random samples from the decoder.
     """
 
-    imgs = []
-
     if torch.cuda.is_available():
         model = model.cuda()
 
-    for _ in range(n_samples):
-        imgs.append((model.sample(1, temp=temp)).clamp(0, 1))
-
-    return imgs
+    return [(model.sample(1, temp=temp)).clamp(0, 1) for _ in range(n_samples)]
 
 
 def interpolate(model, img_0, img_1, n_interpolations=3):
     """
     Perform a linear interpolation between the latent encodings of one image and another.
     """
-
 
     if torch.cuda.is_available():
         model = model.cuda()
@@ -174,12 +168,13 @@ def reconstruct(model, img):
     Encode/decode an image.  Return the reconstructed tensor.
     """
 
-    if torch.cuda.is_available():
-        model = model.cuda()
-        img = img.cuda()
+    with torch.no_grad():
+        if torch.cuda.is_available():
+            model = model.cuda()
+            img = img.cuda()
 
-    model.eval()
-    return model.reconstruct(img)
+        model.eval()
+        return model.reconstruct(img)
 
 def train(model,
           optimizer,
@@ -212,7 +207,7 @@ def train(model,
         epoch_start = time()
         samples = 0
 
-        for batch, _ in dataloader:
+        for batch, *_ in dataloader:
             samples += batch.shape[0]
 
             if torch.cuda.is_available():
@@ -232,7 +227,7 @@ def train(model,
         #save the model weights
         torch.save({"model_state_dict": model.state_dict(),
                     "optimizer_state_dict": optimizer.state_dict()}, 
-                    f"checkpoints/model_{model.start_time.item()}_{model.epoch.item()}")
+                    f"checkpoints/model_{model.start_time.item()}_{model.epoch.item().pt}")
         print()
 
     return model

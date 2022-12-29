@@ -1,11 +1,34 @@
 #!/usr/bin/python3
 import torch
-from models import VAE
+
+from argparse import ArgumentParser
+from configs import get_model
+
+def main():
+    """
+    """
+
+    # get command line args
+    parser = ArgumentParser(description="Transfer weights from original VDVAE to refactored version.")
+
+    #pre-trained options
+    parser.add_argument("--config", type=str, required=True)
+    parser.add_argument("--save-path", type=str, required=True)
+    parser.add_argument("--donor-path", type=str, required=True)
+
+    args = parser.parse_args()
+
+    model = get_model(args.config)
+
+    if model is None:
+        return
+
+    transfer_weights(model, args.save_path, args.donor_path) 
 
 def transfer_weights(model, save_path, donor_weights):
 
     state_dict = torch.load(donor_weights)
-    
+
     with torch.no_grad():
         for parameter in model.parameters():
             parameter.zero_()
@@ -60,9 +83,9 @@ def transfer_weights(model, save_path, donor_weights):
         hdx = 0
 
         for decoder_group in model.decoder.decoder_groups:
-
-            transfer_item(decoder_group.bias, state_dict, f"decoder.bias_xs.{hdx}")
-            hdx += 1
+            if decoder_group.bias is not None:
+                transfer_item(decoder_group.bias, state_dict, f"decoder.bias_xs.{hdx}")
+                hdx += 1
 
             for decoder_block in decoder_group.decoder_blocks:
                 
@@ -118,7 +141,11 @@ def transfer_item(dst, state_dict, src):
     if dst.shape != item.shape:
         print(f"source and destination shapes don't match")
         print(f"src:  {src}")
+        print(f"trying to permute.")
         breakpoint()
 
     else:
         dst.data = state_dict.pop(src)
+
+if __name__ == "__main__":
+    main()

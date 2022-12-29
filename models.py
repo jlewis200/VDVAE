@@ -5,11 +5,8 @@ Variational Auto Encoder (VAE) model.
 """
 
 import torch
-import math
-import numpy as np
 
 from torch import nn
-from torch.nn import GELU
 from torch.distributions.kl import kl_divergence
 from torch.distributions.beta import Beta
 from torch.distributions.categorical import Categorical
@@ -17,18 +14,20 @@ from torch.distributions import Normal
 from torch.nn.functional import interpolate, log_softmax
 from torch import logsumexp, sigmoid, tanh
 from time import time
-from vae_helpers import DmolNet, draw_gaussian_diag_samples, gaussian_analytical_kl
+
+from vae_helpers import DmolNet
+
 
 class VAE(nn.Module):
     """
-    VAE Encoder/Decoder using stride 1 convolutions and avgpool/interpolate for up/down sampling.
+    VAE Encoder/Decoder using stride 1 convolutions and avgpool/interpolate for down/up sampling.
     """
 
-    def __init__(self, encoder_layers, decoder_layers):
+    def __init__(self, encoder_layers, decoder_layers, low_bit=False):
         super().__init__()
-
+        
         self.encoder = Encoder(encoder_layers)
-        self.decoder = Decoder(decoder_layers)
+        self.decoder = Decoder(decoder_layers, low_bit=low_bit)
         
         #register the training epoch and start time so it is saved with the model's state_dict
         self.register_buffer("epoch", torch.tensor([0], dtype=int))
@@ -43,9 +42,16 @@ class VAE(nn.Module):
 
     def get_nll(self, tensor, target):
         """
-        Apply the target scaling function for the loss and pass to the decoder.
+        Apply the loss target transform and pass to the decoder.
         """
-    
+ 
+        #TODO:  find a better way to do this
+        #the ffhq dataset is stored in [0, 255]
+        if target.dtype == torch.uint8:
+            target = target.to(torch.float32) / 255
+            target = target.permute(0, 3, 1, 2)
+
+   
         target = self.transform_target(target)
 
         return self.decoder.get_nll(tensor, target)
@@ -54,7 +60,13 @@ class VAE(nn.Module):
         """
         Apply the model input transform and pass to encoder.
         """
-        
+
+        #TODO:  find a better way to do this
+        #the ffhq dataset is stored in [0, 255]
+        if tensor.dtype == torch.uint8:
+            tensor = tensor.to(torch.float32) / 255
+            tensor = tensor.permute(0, 3, 1, 2)
+
         tensor = self.transform_in(tensor)
 
         return self.encoder.forward(tensor)
@@ -64,10 +76,9 @@ class VAE(nn.Module):
         Reconstruct an image.
         """
 
-        activations = self.encode(tensor)
-        px_z = self.decode(activations)
-        img = self.decoder.out_net.sample(px_z)
-        return img
+        px_z = self.decode(self.encode(tensor))
+        
+        return self.decoder.out_net.sample(px_z)
 
 class Encoder(nn.Module):
     """
@@ -85,6 +96,7 @@ class Encoder(nn.Module):
         #calculate the weight scaling factor
         final_scale = (1 / n_blocks)**0.5
 
+        #construct the encoder groups
         self.encoder_groups = nn.Sequential()
 
         for layer in layers:
@@ -98,9 +110,10 @@ class Encoder(nn.Module):
         #input convolution
         tensor = self.in_conv(tensor)
 
+        #encode the input
         self.encoder_groups(tensor)
 
-        #collect the activations
+        #collect the activations from the encoding process
         activations = {}
 
         for encoder_group in self.encoder_groups:
@@ -113,10 +126,8 @@ class Decoder(nn.Module):
     VAE Decoder class.
     """
 
-    def __init__(self, layers):
+    def __init__(self, layers, low_bit=False):
         super().__init__()
-        
-        self.decoder_groups = nn.ModuleList()
         
         #get the total number of blocks for weight scaling
         n_blocks = sum(layer["n_blocks"] for layer in layers)
@@ -124,6 +135,9 @@ class Decoder(nn.Module):
         #calculate the weight scaling factor
         final_scale = (1 / n_blocks)**0.5
 
+        #construct the decoder_groups
+        self.decoder_groups = nn.ModuleList()
+        
         for layer in layers:
             self.decoder_groups.append(DecoderGroup(final_scale=final_scale, **layer))
 
@@ -133,7 +147,7 @@ class Decoder(nn.Module):
 
         self.out_conv = nn.Conv2d(channels, 3, kernel_size=3, padding=1)
         self.mixture_net = MixtureNet(10, channels)
-        self.out_net = DmolNet(channels, 10)
+        self.out_net = DmolNet(channels, 10, low_bit)
 
     def forward(self, activations=None, temp=0):
         """
@@ -150,34 +164,37 @@ class Decoder(nn.Module):
 
         if torch.cuda.is_available():
             tensor = tensor.cuda()
-
+        
+        #pass through all decoder groups
         for decoder_group in self.decoder_groups:
             group_activations = activations[decoder_group.resolution] if activations is not None else None
             tensor = decoder_group(tensor, activations=group_activations, temp=temp)
 
-        tensor = tensor * self.gain + self.bias
-
-        return tensor
+        #apply gain/bias
+        return tensor * self.gain + self.bias
 
     def sample(self, n_samples, temp=0):
         """
-        Sample from the model.  Temperature controls the variance of the distributions the latent
-        encodings are drawn from.  A higher temperature leads to higher variance and more dynamic
-        results.
+        Sample from the model.  Temperature scales the standard deviation of the distributions the
+        latent encodings are drawn from.  A temperature of 1 corresponds with the original standard
+        deviation.
         """
         
-        tensor = self.forward(activations=None, temp=temp)
-    
-        #return self.mixture_net.sample(tensor)
-        return self.out_net.sample(tensor)
+        #collect the tensor encoding of the posterior
+        px_z = self.forward(activations=None, temp=temp)
+   
+        #sample from the reconstruction network
+        return self.out_net.sample(px_z)
 
     def reconstruct(self, activations, temp=0):
         """
         Perform a forward pass through the decoder.
         """
+
+        #collect the tensor encoding of the input
         tensor = self.forward(activations=activations)
         
-        #return self.mixture_net.sample(tensor)
+        #sample from the reconstruction network
         return self.out_net.sample(tensor, temp=temp)
  
     def get_nll(self, tensor, target):
@@ -186,28 +203,18 @@ class Decoder(nn.Module):
         """
 
         #return self.mixture_net(tensor, target)      
-        return self.out_net.nll(tensor, target.permute(0, 2, 3, 1))      
+        return self.out_net.nll(tensor, target)      
 
     def get_loss_kl(self):
         """
         Collect the KL divergence loss from all groups.
         """
 
-        losses = []
-
-        #collect the losses
-        for decoder_group in self.decoder_groups:
-            losses.append(decoder_group.get_loss_kl())
-
-        #sum the tensors (gradients are preserved)
-        loss_kl = sum(losses)
+        #gather and sum the KL losses from each decoder group (gradients are preserved)
+        loss_kl = sum(group.get_loss_kl() for group in self.decoder_groups)
 
         #scale by the original resolution and color depth
-        scale_factor = 3 * self.decoder_groups[-1].resolution**2
-
-        loss_kl = loss_kl / scale_factor
-
-        return loss_kl
+        return loss_kl / (3 * self.decoder_groups[-1].resolution**2)
 
 
 class EncoderGroup(nn.Module):
@@ -215,11 +222,7 @@ class EncoderGroup(nn.Module):
     Encoder group encapsulates all encoder blocks at the same tensor H x W.
     """
     
-    def __init__(self,
-                 channels,
-                 resolution,
-                 n_blocks,
-                 final_scale=1):
+    def __init__(self, channels, resolution, n_blocks, final_scale=1):
         super().__init__()
 
         self.resolution = resolution
@@ -235,7 +238,6 @@ class EncoderGroup(nn.Module):
         for _ in range(n_blocks):
             self.encoder_blocks.append(Block(channels, mid_channels, channels, mid_kernel=mid_kernel, final_scale=final_scale, res=True))
         
-       
     def forward(self, tensor):
         """
         Perform the forward pass through the convolution module.  Store the activations.
@@ -270,23 +272,21 @@ class DecoderGroup(nn.Module):
     Decoder group encapsulates all decder blocks at the same tensor H x W.
     """
 
-    def __init__(self,
-                 channels,
-                 n_blocks,
-                 resolution,
-                 bias=True,
-                 final_scale=1):
+    def __init__(self, channels, n_blocks, resolution, bias=True, final_scale=1):
         super().__init__()
       
         self.channels = channels
         self.resolution = resolution
+
+        #construct the decoder blocks
         self.decoder_blocks = nn.ModuleList()
 
         for _ in range(n_blocks):
             self.decoder_blocks.append(DecoderBlock(channels, resolution, final_scale))
         
         self.bias = None
-        
+       
+        #register the bias as a learnable parameter
         if bias:
             self.bias = nn.Parameter(torch.zeros((1, channels, resolution, resolution)))
 
@@ -295,6 +295,7 @@ class DecoderGroup(nn.Module):
         Perform the forward pass through this group.
         """
 
+        #the input tensor will be None for the first decoder group
         if tensor is None:
             tensor = torch.zeros_like(self.bias, requires_grad=True)
         
@@ -304,7 +305,8 @@ class DecoderGroup(nn.Module):
         if self.bias is not None:
             #add the bias term for this decoder group
             tensor = tensor + self.bias
-          
+         
+        #pass through the decoder blocks
         for decoder_block in self.decoder_blocks:
             tensor = decoder_block(tensor, activations=activations, temp=temp)
 
@@ -316,16 +318,8 @@ class DecoderGroup(nn.Module):
         Get the KL divergence loss for each decoder block in this decoder group.
         """
 
-        losses = []
-
-        #gather the KL losses from each decder block
-        for decoder_block in self.decoder_blocks:
-            losses.append(decoder_block.loss_kl.sum(dim=(1, 2, 3)))
-
-        #sum the tensors (gradients are preserved)
-        loss_kl = sum(losses)
-
-        return loss_kl      
+        #gather and sum the KL losses from each decder block (gradients are preserved)
+        return sum(block.loss_kl.sum(dim=(1, 2, 3)) for block in self.decoder_blocks)
 
 
 class DecoderBlock(nn.Module):
@@ -333,10 +327,7 @@ class DecoderBlock(nn.Module):
     Decoder block per VDVAE architecture.
     """
 
-    def __init__(self,
-                 channels,
-                 resolution,
-                 final_scale):
+    def __init__(self, channels, resolution, final_scale):
         super().__init__()
 
         #mid_channels and z_channels ratios from VDVAE
@@ -359,65 +350,42 @@ class DecoderBlock(nn.Module):
     def forward(self, tensor, activations=None, temp=0):
         """
         Perform a forward pass through the convolution module.  This method is used when training
-        and when sampling from the model.  The main difference  is which distribution the latent
+        and when sampling from the model.  The main difference is which distribution the latent
         variable z is drawn from.  During training z is drawn from the posterior q(z|x), whereas
         during sampling z is drawn from the prior p(z).
- 
-        Note:  A ValueError during the creation of either normal distribution is a sign the 
-        learning rate is too high.  The mins/maxs of p_logstd have been observed to trend toward
-        inf/-inf when the LR is too high and training collapses.  The magnitude of the mean/logstd
-        tend to increase as the tensor resolution increases.
         """      
 
         if activations is None:
             return self.sample(tensor, activations, temp)
-             
-        #get the mean/log-standard-deviation of q
-        q_mean, q_logstd = self.phi(torch.cat((tensor, activations), dim=1)).chunk(2, dim=1)
+ 
+        #get the mean/log-standard-deviation of q/p, and the residual flow to the main path
+        q_mean, q_logstd = self.phi(torch.cat((tensor, activations), dim=1)).split(self.z_channels, dim=1)
+        p_mean, p_logstd, res = self.theta(tensor).split(self.z_channels, self.z_channels, self.channels, dim=1)
 
-        #get q = N(q_mean, q_std)
+        #get q = N(q_mean, q_std), p = N(p_mean, p_std), and KL divergence from q to p
         q_dist = Normal(q_mean, torch.exp(q_logstd))
-      
-        #get the mean, log-standard-deviation of p, and the residual flow to the main path
-        theta = self.theta(tensor)
-        p_mean, p_logstd, res = torch.tensor_split(theta, (self.z_channels, 2 * self.z_channels), dim=1)
-
-        #get p = N(p_mean, p_std)
         p_dist = Normal(p_mean, torch.exp(p_logstd))
-
+        self.loss_kl = kl_divergence(q_dist, p_dist)
+ 
         #join the output from theta with the main branch
         tensor = tensor + res
 
         #get reparameterized sample from N(q_mean, q_std)
         z_rsample = q_dist.rsample()
 
-        #calculate the KL divergence between p and q
-        self.loss_kl = kl_divergence(q_dist, p_dist)
-        
         #project z to the proper dimensions and join with main branch
         tensor = tensor + self.z_projection(z_rsample)
 
         #pass through the res block
-        tensor = self.res(tensor)
-
-        return tensor
+        return self.res(tensor)
 
     def sample(self, tensor, activations=None, temp=0):
         """
-        Perform a forward pass through the convolution module.  This method is used when training
-        and when sampling from the model.  The main difference  is which distribution the latent
-        variable z is drawn from.  During training z is drawn from the posterior q(z|x), whereas
-        during sampling z is drawn from the prior p(z).
- 
-        Note:  A ValueError during the creation of either normal distribution is a sign the 
-        learning rate is too high.  The mins/maxs of p_logstd have been observed to trend toward
-        inf/-inf when the LR is too high and training collapses.  The magnitude of the mean/logstd
-        tend to increase as the tensor resolution increases.
+        Perform a sampling pass through the convolution module.
         """      
 
         #get the mean, log-standard-deviation of p, and the residual flow to the main path
-        theta = self.theta(tensor)
-        p_mean, p_logstd, res = torch.tensor_split(theta, (self.z_channels, 2 * self.z_channels), dim=1)
+        p_mean, p_logstd, res = self.theta(tensor).split(self.z_channels, self.z_channels, self.channels, dim=1)
 
         #get p = N(p_mean, p_std)
         p_dist = Normal(p_mean, temp * torch.exp(p_logstd))
@@ -432,9 +400,7 @@ class DecoderBlock(nn.Module):
         tensor = tensor + self.z_projection(z_rsample)
 
         #pass through the res block
-        tensor = self.res(tensor)
-
-        return tensor
+        return self.res(tensor)
 
 
 class Block(nn.Sequential):
@@ -455,13 +421,13 @@ class Block(nn.Sequential):
 
         padding = 0 if mid_kernel == 1 else 1
 
-        self.append(GELU())
+        self.append(nn.GELU())
         self.append(nn.Conv2d(in_channels, mid_channels, 1))
-        self.append(GELU())
+        self.append(nn.GELU())
         self.append(nn.Conv2d(mid_channels, mid_channels, mid_kernel, padding=padding))
-        self.append(GELU())
+        self.append(nn.GELU())
         self.append(nn.Conv2d(mid_channels, mid_channels, mid_kernel, padding=padding))
-        self.append(GELU())
+        self.append(nn.GELU())
         self.append(nn.Conv2d(mid_channels, out_channels, 1))
 
         #scale the final convolution initial weights by final_scale
@@ -630,22 +596,13 @@ class MixtureNet(nn.Module):
 
         #initialize the distributions
         #shape N x n_mixtures x H x W
-        #dist_r = Beta(dist_r_0, dist_r_1, validate_args=True)
-        #dist_g = Beta(dist_g_0, dist_g_1, validate_args=True)
-        #dist_b = Beta(dist_b_0, dist_b_1, validate_args=True)
+        #dist_r = Beta(dist_r_0, dist_r_1)
+        #dist_g = Beta(dist_g_0, dist_g_1)
+        #dist_b = Beta(dist_b_0, dist_b_1)
 
-        dist_r = Normal(dist_r_0, torch.exp(dist_r_1 / 2), validate_args=True)
-        dist_g = Normal(dist_g_0, torch.exp(dist_g_1 / 2), validate_args=True)
-        dist_b = Normal(dist_b_0, torch.exp(dist_b_1 / 2), validate_args=True)
+        dist_r = Normal(dist_r_0, torch.exp(dist_r_1))
+        dist_g = Normal(dist_g_0, torch.exp(dist_g_1))
+        dist_b = Normal(dist_b_0, torch.exp(dist_b_1))
 
         return dist_r, dist_g, dist_b, log_prob_mix
 
-
-class GELU6(nn.GELU):
-    """
-    This non-linearity combines the GELU profile with a clamp function to constrain the
-    output to 6 or less, similar to the ReLU6 non-linearity.
-    """
-
-    def forward(self, tensor):
-        return super().forward(tensor).clamp(max=6)
