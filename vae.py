@@ -33,6 +33,7 @@ def main():
     parser.add_argument("-e", "--epochs", type=int, default=50, help="number of training epochs")
     parser.add_argument("-n", "--batch-size", type=int, default=8, help="batch size")
     parser.add_argument("-m", "--mixture-net-only", action="store_true", help="only train the mixture net")
+    parser.add_argument("-d", "--device", type=str, default="cuda:0", help="torch device string")
 
     #pre-trained options
     parser.add_argument("--checkpoint", type=str)
@@ -46,15 +47,15 @@ def main():
     parser.add_argument("--temperature", type=float, default=1.0, help="temperature of random samples")
 
     args = parser.parse_args()
-
+    
     model = get_model(args.config)
 
     if model is None:
+        print("config not found")
         return
 
-    #send model to cuda before initializing optimizer
-    if torch.cuda.is_available():
-        model = model.cuda()
+    #send model to target device before initializing optimizer
+    model = model.to(args.device)
     
     optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate, betas=(0.9, 0.9))
 
@@ -130,9 +131,6 @@ def sample(model, n_samples, temp=1.0):
     Get a number of random samples from the decoder.
     """
 
-    if torch.cuda.is_available():
-        model = model.cuda()
-
     return [(model.sample(1, temp=temp)).clamp(0, 1) for _ in range(n_samples)]
 
 
@@ -141,10 +139,8 @@ def interpolate(model, img_0, img_1, n_interpolations=3):
     Perform a linear interpolation between the latent encodings of one image and another.
     """
 
-    if torch.cuda.is_available():
-        model = model.cuda()
-        img_0 = img_0.cuda()
-        img_1 = img_1.cuda()
+    img_0 = img_0.to(model.device)
+    img_1 = img_1.to(model.device)
 
     interpolations = []
     model.eval()
@@ -169,9 +165,7 @@ def reconstruct(model, img):
     """
 
     with torch.no_grad():
-        if torch.cuda.is_available():
-            model = model.cuda()
-            img = img.cuda()
+        img = img.to(model.device)
 
         model.eval()
         return model.reconstruct(img)
@@ -209,9 +203,7 @@ def train(model,
 
         for batch, *_ in dataloader:
             samples += batch.shape[0]
-
-            if torch.cuda.is_available():
-                batch = batch.cuda()
+            batch = batch.to(model.device)
             
             loss, loss_kl, loss_nll, grad_norm =  train_step(model,
                                                              optimizer,
@@ -227,7 +219,7 @@ def train(model,
         #save the model weights
         torch.save({"model_state_dict": model.state_dict(),
                     "optimizer_state_dict": optimizer.state_dict()}, 
-                    f"checkpoints/model_{model.start_time.item()}_{model.epoch.item().pt}")
+                    f"checkpoints/model_{model.start_time.item()}_{model.epoch.item()}.pt")
         print()
 
     return model

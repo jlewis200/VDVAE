@@ -32,7 +32,7 @@ def get_model(config):
         dataset_kwargs = {"root": "cifar10", 
                           "download": True, 
                           "transform": ToTensor()}
-        model.get_dataset = lambda: CIFAR10(dataset_kwargs)
+        model.get_dataset = lambda: CIFAR10(**dataset_kwargs)
        
         #mean/std used by VDVAE to scale model input
         mean = 0.473091686
@@ -105,10 +105,6 @@ def get_model(config):
         model.dataset_kwargs = {"root": "celeba", 
                                 "download": True, 
                                 "transform": model.transform}
-
-    else:
-        print("unsupported dataset")
-        return
 
     return model
 

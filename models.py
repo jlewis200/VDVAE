@@ -40,6 +40,14 @@ class VAE(nn.Module):
         self.sample = self.decoder.sample
         self.get_loss_kl = self.decoder.get_loss_kl
 
+    @property
+    def device(self):
+        """
+        Return the pytorch device where input tensors should be located.
+        """
+
+        return self.encoder.device
+
     def get_nll(self, tensor, target):
         """
         Apply the loss target transform and pass to the decoder.
@@ -102,6 +110,14 @@ class Encoder(nn.Module):
         for layer in layers:
             self.encoder_groups.append(EncoderGroup(final_scale=final_scale, **layer))
 
+    @property
+    def device(self):
+        """
+        Return the pytorch device where input tensors should be located.
+        """
+
+        return self.in_conv.weight.device
+
     def forward(self, tensor):
         """
         Perform a forward pass through the encoder.
@@ -162,9 +178,8 @@ class Decoder(nn.Module):
             #None activations indicates a sampling pass
             tensor = torch.zeros_like(self.decoder_groups[0].bias, requires_grad=True)
 
-        if torch.cuda.is_available():
-            tensor = tensor.cuda()
-        
+        tensor = tensor.to(self.gain.device)
+
         #pass through all decoder groups
         for decoder_group in self.decoder_groups:
             group_activations = activations[decoder_group.resolution] if activations is not None else None
@@ -330,6 +345,8 @@ class DecoderBlock(nn.Module):
     def __init__(self, channels, resolution, final_scale):
         super().__init__()
 
+        self.channels = channels
+
         #mid_channels and z_channels ratios from VDVAE
         mid_channels = channels // 4
 
@@ -360,7 +377,7 @@ class DecoderBlock(nn.Module):
  
         #get the mean/log-standard-deviation of q/p, and the residual flow to the main path
         q_mean, q_logstd = self.phi(torch.cat((tensor, activations), dim=1)).split(self.z_channels, dim=1)
-        p_mean, p_logstd, res = self.theta(tensor).split(self.z_channels, self.z_channels, self.channels, dim=1)
+        p_mean, p_logstd, res = self.theta(tensor).split((self.z_channels, self.z_channels, self.channels), dim=1)
 
         #get q = N(q_mean, q_std), p = N(p_mean, p_std), and KL divergence from q to p
         q_dist = Normal(q_mean, torch.exp(q_logstd))
@@ -385,7 +402,7 @@ class DecoderBlock(nn.Module):
         """      
 
         #get the mean, log-standard-deviation of p, and the residual flow to the main path
-        p_mean, p_logstd, res = self.theta(tensor).split(self.z_channels, self.z_channels, self.channels, dim=1)
+        p_mean, p_logstd, res = self.theta(tensor).split((self.z_channels, self.z_channels, self.channels), dim=1)
 
         #get p = N(p_mean, p_std)
         p_dist = Normal(p_mean, temp * torch.exp(p_logstd))
