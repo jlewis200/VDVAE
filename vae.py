@@ -16,6 +16,7 @@ import numpy as np
 from torch.utils.data import DataLoader
 from torchvision.datasets import CelebA, CIFAR10
 from torchvision.transforms import ToTensor, ToPILImage, Compose, Resize, RandomHorizontalFlip, Normalize
+from torchvision.transforms.functional import to_tensor
 from PIL import Image
 from weight_mapper import transfer_weights
 
@@ -27,8 +28,6 @@ def main():
     """
     Main function to parse command line args and initiate training/experiments.
     """
-
-    torch.manual_seed(0)
     
     # get command line args
     parser = ArgumentParser(description="Perform VAE experiments")
@@ -71,12 +70,19 @@ def main():
 
         model = VAE(encoder_layers, decoder_layers)
         model.dataset = CIFAR10
+        
+        #mean/std used by VDVAE to scale model input
         mean = 0.473091686
         std = 0.251636706
-        model.transform = Compose((ToTensor(), Normalize(mean, std), Resize((32, 32))))
+        model.transform_in = Compose((Normalize(mean, std), Resize((32, 32))))
+
+        #mean/std used by VDVAE to scale targets for the loss function
+        #map [0, 1] to [-1, 1]
+        model.transform_target = Compose((Normalize(0.5, 0.5), Resize((32, 32))))
+
         model.dataset_kwargs = {"root": "cifar10", 
                                 "download": True, 
-                                "transform": model.transform}
+                                "transform": ToTensor()}
         #transfer_weights(model, "checkpoints/cifar10_pretrained.pt", "vdvae_checkpoints/cifar10-seed3-iter-1050000-model-ema.th")
 
     elif args.config == "celeba":
@@ -134,14 +140,14 @@ def main():
                       mixture_net_only=args.mixture_net_only)
 
     if args.reconstruct != []:
-        imgs = load_images(args.reconstruct, model.transform)
+        imgs = load_images(args.reconstruct, model.transform_in)
         imgs = reconstruct(model, imgs)
 
         for img, filename in zip(imgs, args.reconstruct):
             ToPILImage()(img.squeeze(0)).save(f"reconstructed.jpg")
 
     if args.interpolate != []:
-        img_0, img_1 = load_images(args.interpolate, model.transform).split(1)
+        img_0, img_1 = load_images(args.interpolate, model.transform_in).split(1)
         interpolations = interpolate(model,
                                      img_0,
                                      img_1,
@@ -165,7 +171,7 @@ def load_images(img_paths, transform):
     """
     
     if img_paths != []:
-        imgs = [transform(Image.open(path).convert("RGB")).unsqueeze(0) for path in img_paths]
+        imgs = [to_tensor(Image.open(path).convert("RGB")).unsqueeze(0) for path in img_paths]
         return torch.cat(imgs)
 
 

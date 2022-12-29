@@ -40,12 +40,22 @@ class VAE(nn.Module):
         self.decode = self.decoder.forward
         self.sample = self.decoder.sample
         self.get_loss_kl = self.decoder.get_loss_kl
-        self.get_nll = self.decoder.get_nll
+
+    def get_nll(self, tensor, target):
+        """
+        Apply the target scaling function for the loss and pass to the decoder.
+        """
+    
+        target = self.transform_target(target)
+
+        return self.decoder.get_nll(tensor, target)
 
     def encode(self, tensor):
         """
         Apply the model input transform and pass to encoder.
         """
+        
+        tensor = self.transform_in(tensor)
 
         return self.encoder.forward(tensor)
 
@@ -176,7 +186,7 @@ class Decoder(nn.Module):
         """
 
         #return self.mixture_net(tensor, target)      
-        return self.out_net.nll(tensor, (target.permute(0, 2, 3, 1) * 2) - 1)      
+        return self.out_net.nll(tensor, target.permute(0, 2, 3, 1))      
 
     def get_loss_kl(self):
         """
