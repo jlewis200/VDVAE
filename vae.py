@@ -5,22 +5,16 @@ Variational Auto Encoder
 """
 
 
-# pylint: disable=no-member
-
 from argparse import ArgumentParser
 from time import time
 
+# pylint: disable=no-member
 import torch
-import numpy as np
 
 from torch.utils.data import DataLoader
-from torchvision.datasets import CelebA, CIFAR10
-from torchvision.transforms import ToTensor, ToPILImage, Compose, Resize, RandomHorizontalFlip, Normalize
-from torchvision.transforms.functional import to_tensor
+from torchvision.transforms.functional import to_tensor, to_pil_image
 from PIL import Image
-from weight_mapper import transfer_weights
-
-from models import VAE
+from configs import get_model
 
 GRAD_CLIP = 200
 
@@ -53,68 +47,9 @@ def main():
 
     args = parser.parse_args()
 
-    if args.config == "cifar10":
-        encoder_layers = [
-            {"channels": 384, "n_blocks": 12, "resolution":  32},
-            {"channels": 384, "n_blocks":  7, "resolution":  16},
-            {"channels": 384, "n_blocks":  7, "resolution":   8},
-            {"channels": 384, "n_blocks":  4, "resolution":   4},
-            {"channels": 384, "n_blocks":  3, "resolution":   1}]
+    model = get_model(args.config)
 
-        decoder_layers = [
-            {"channels": 384, "n_blocks":  1, "resolution":   1},
-            {"channels": 384, "n_blocks":  3, "resolution":   4},
-            {"channels": 384, "n_blocks":  6, "resolution":   8},
-            {"channels": 384, "n_blocks": 11, "resolution":  16},
-            {"channels": 384, "n_blocks": 22, "resolution":  32}]
-
-        model = VAE(encoder_layers, decoder_layers)
-        model.dataset = CIFAR10
-        
-        #mean/std used by VDVAE to scale model input
-        mean = 0.473091686
-        std = 0.251636706
-        model.transform_in = Compose((Normalize(mean, std), Resize((32, 32))))
-
-        #mean/std used by VDVAE to scale targets for the loss function
-        #map [0, 1] to [-1, 1]
-        model.transform_target = Compose((Normalize(0.5, 0.5), Resize((32, 32))))
-
-        model.dataset_kwargs = {"root": "cifar10", 
-                                "download": True, 
-                                "transform": ToTensor()}
-        #transfer_weights(model, "checkpoints/cifar10_pretrained.pt", "vdvae_checkpoints/cifar10-seed3-iter-1050000-model-ema.th")
-
-    elif args.config == "celeba":
-        encoder_layers = [
-            {"channels": 512, "n_blocks":  3, "resolution": 128},
-            {"channels": 512, "n_blocks":  8, "resolution":  64},
-            {"channels": 512, "n_blocks": 12, "resolution":  32},
-            {"channels": 512, "n_blocks": 17, "resolution":  16},
-            {"channels": 512, "n_blocks":  7, "resolution":   8},
-            {"channels": 512, "n_blocks":  5, "resolution":   4},
-            {"channels": 512, "n_blocks":  4, "resolution":   1}]   
-
-        decoder_layers = [
-            {"channels": 512, "n_blocks":  2, "resolution":   1},
-            {"channels": 512, "n_blocks":  3, "resolution":   4},
-            {"channels": 512, "n_blocks":  4, "resolution":   8},
-            {"channels": 512, "n_blocks":  9, "resolution":  16},
-            {"channels": 512, "n_blocks": 21, "resolution":  32},
-            {"channels": 512, "n_blocks": 13, "resolution":  64, "bias": False},
-            {"channels": 512, "n_blocks":  7, "resolution": 128, "bias": False}]
-
-        model = VAE(encoder_layers, decoder_layers)
-        model.dataset = CelebA
-        mean = 0.
-        std = 0.
-        model.transform = Compose((ToTensor(), Normalize(mean, std), Resize((128, 128))))
-        model.dataset_kwargs = {"root": "celeba", 
-                                "download": True, 
-                                "transform": model.transform}
-
-    else:
-        print("unsupported dataset")
+    if model is None:
         return
 
     #send model to cuda before initializing optimizer
@@ -144,7 +79,7 @@ def main():
         imgs = reconstruct(model, imgs)
 
         for img, filename in zip(imgs, args.reconstruct):
-            ToPILImage()(img.squeeze(0)).save(f"reconstructed.jpg")
+            to_pil_image(img.squeeze(0)).save(f"reconstructed.jpg")
 
     if args.interpolate != []:
         img_0, img_1 = load_images(args.interpolate, model.transform_in).split(1)
@@ -184,7 +119,7 @@ def get_montage(imgs):
 
     for idx, img in enumerate(imgs):
         img = img.squeeze(0)
-        img = ToPILImage()(img)
+        img = to_pil_image(img)
         montage.paste(img, (idx * imgs[0].shape[-1], 0))
 
     return montage
