@@ -17,18 +17,19 @@ from torch.utils.data import DataLoader
 from torchvision.datasets import CelebA, CIFAR10
 from torchvision.transforms import ToTensor, ToPILImage, Compose, Resize, RandomHorizontalFlip, Normalize
 from PIL import Image
-
-
-from models import VAE
 from weight_mapper import transfer_weights
 
-GRAD_CLIP = 100
+from models import VAE
+
+GRAD_CLIP = 200
 
 def main():
     """
     Main function to parse command line args and initiate training/experiments.
     """
 
+    torch.manual_seed(0)
+    
     # get command line args
     parser = ArgumentParser(description="Perform VAE experiments")
 
@@ -38,6 +39,7 @@ def main():
     parser.add_argument("-l", "--learning-rate", type=float, default=0.00015, help="learning rate of optimizer")
     parser.add_argument("-e", "--epochs", type=int, default=50, help="number of training epochs")
     parser.add_argument("-n", "--batch-size", type=int, default=8, help="batch size")
+    parser.add_argument("-m", "--mixture-net-only", action="store_true", help="only train the mixture net")
 
     #pre-trained options
     parser.add_argument("--checkpoint", type=str)
@@ -67,89 +69,43 @@ def main():
             {"channels": 384, "n_blocks": 11, "resolution":  16},
             {"channels": 384, "n_blocks": 22, "resolution":  32}]
 
-#        encoder_layers = [
-#            {"channels": 512, "n_blocks":  9, "resolution":  32},
-#            {"channels": 512, "n_blocks":  9, "resolution":  16},
-#            {"channels": 512, "n_blocks":  6, "resolution":   8},
-#            {"channels": 512, "n_blocks":  6, "resolution":   4},
-#            {"channels": 512, "n_blocks":  3, "resolution":   2},
-#            {"channels": 512, "n_blocks":  3, "resolution":   1}]
-#
-#        decoder_layers = [
-#            {"channels": 512, "n_blocks":  3, "resolution":   1},
-#            {"channels": 512, "n_blocks":  3, "resolution":   2},
-#            {"channels": 512, "n_blocks":  6, "resolution":   4},
-#            {"channels": 512, "n_blocks":  6, "resolution":   8},
-#            {"channels": 512, "n_blocks":  9, "resolution":  16},
-#            {"channels": 512, "n_blocks":  9, "resolution":  32}]
-
-#        encoder_layers = [
-#            {"channels": 512, "n_blocks":  2, "resolution":  32},
-#            {"channels": 512, "n_blocks":  2, "resolution":  16},
-#            {"channels": 512, "n_blocks":  2, "resolution":   8},
-#            {"channels": 512, "n_blocks":  2, "resolution":   4},
-#            {"channels": 512, "n_blocks":  2, "resolution":   2},
-#            {"channels": 512, "n_blocks":  2, "resolution":   1}]
-#
-#        decoder_layers = [
-#            {"channels": 512, "n_blocks":  2, "resolution":   1},
-#            {"channels": 512, "n_blocks":  2, "resolution":   2},
-#            {"channels": 512, "n_blocks":  2, "resolution":   4},
-#            {"channels": 512, "n_blocks":  2, "resolution":   8},
-#            {"channels": 512, "n_blocks":  2, "resolution":  16},
-#            {"channels": 512, "n_blocks":  2, "resolution":  32}]
-
         model = VAE(encoder_layers, decoder_layers)
         model.dataset = CIFAR10
+        mean = 0.473091686
+        std = 0.251636706
+        model.transform = Compose((ToTensor(), Normalize(mean, std), Resize((32, 32))))
         model.dataset_kwargs = {"root": "cifar10", 
                                 "download": True, 
-                                "transform": Compose((ToTensor(), Resize((32, 32))))}
-        transfer_weights(model)
+                                "transform": model.transform}
+        #transfer_weights(model, "checkpoints/cifar10_pretrained.pt", "vdvae_checkpoints/cifar10-seed3-iter-1050000-model-ema.th")
 
     elif args.config == "celeba":
-#        encoder_layers = [
-#            {"channels": 512, "n_blocks":  3, "resolution": 128},
-#            {"channels": 512, "n_blocks":  8, "resolution":  64},
-#            {"channels": 512, "n_blocks": 12, "resolution":  32},
-#            {"channels": 512, "n_blocks": 17, "resolution":  16},
-#            {"channels": 512, "n_blocks":  7, "resolution":   8},
-#            {"channels": 512, "n_blocks":  5, "resolution":   4, "downsample_ratio": 2},
-#            {"channels": 512, "n_blocks":  4, "resolution":   1, "downsample_ratio": 0}]   
-#
-#        decoder_layers = [
-#            {"channels": 512, "n_blocks":  2, "resolution":   1, "upsample_ratio": 0},
-#            {"channels": 512, "n_blocks":  3, "resolution":   4, "upsample_ratio": 4},
-#            {"channels": 512, "n_blocks":  4, "resolution":   8},
-#            {"channels": 512, "n_blocks":  9, "resolution":  16},
-#            {"channels": 512, "n_blocks": 21, "resolution":  32},
-#            {"channels": 512, "n_blocks": 13, "resolution":  64, "bias": False},
-#            {"channels": 512, "n_blocks":  7, "resolution": 128, "bias": False}]
-
         encoder_layers = [
-            {"channels": 512, "n_blocks":  2, "resolution": 128},
-            {"channels": 512, "n_blocks":  2, "resolution":  64},
-            {"channels": 512, "n_blocks":  2, "resolution":  32},
-            {"channels": 512, "n_blocks":  2, "resolution":  16},
-            {"channels": 512, "n_blocks":  2, "resolution":   8},
-            {"channels": 512, "n_blocks":  2, "resolution":   4},
-            {"channels": 512, "n_blocks":  2, "resolution":   2},
-            {"channels": 512, "n_blocks":  2, "resolution":   1, "downsample_ratio": 0}]   
+            {"channels": 512, "n_blocks":  3, "resolution": 128},
+            {"channels": 512, "n_blocks":  8, "resolution":  64},
+            {"channels": 512, "n_blocks": 12, "resolution":  32},
+            {"channels": 512, "n_blocks": 17, "resolution":  16},
+            {"channels": 512, "n_blocks":  7, "resolution":   8},
+            {"channels": 512, "n_blocks":  5, "resolution":   4},
+            {"channels": 512, "n_blocks":  4, "resolution":   1}]   
 
         decoder_layers = [
-            {"channels": 512, "n_blocks":  2, "resolution":   1, "upsample_ratio": 0},
-            {"channels": 512, "n_blocks":  2, "resolution":   2},
-            {"channels": 512, "n_blocks":  2, "resolution":   4},
-            {"channels": 512, "n_blocks":  2, "resolution":   8},
-            {"channels": 512, "n_blocks":  2, "resolution":  16},
-            {"channels": 512, "n_blocks":  2, "resolution":  32},
-            {"channels": 512, "n_blocks":  2, "resolution":  64},
-            {"channels": 512, "n_blocks":  2, "resolution": 128}]
-        
+            {"channels": 512, "n_blocks":  2, "resolution":   1},
+            {"channels": 512, "n_blocks":  3, "resolution":   4},
+            {"channels": 512, "n_blocks":  4, "resolution":   8},
+            {"channels": 512, "n_blocks":  9, "resolution":  16},
+            {"channels": 512, "n_blocks": 21, "resolution":  32},
+            {"channels": 512, "n_blocks": 13, "resolution":  64, "bias": False},
+            {"channels": 512, "n_blocks":  7, "resolution": 128, "bias": False}]
+
         model = VAE(encoder_layers, decoder_layers)
         model.dataset = CelebA
+        mean = 0.
+        std = 0.
+        model.transform = Compose((ToTensor(), Normalize(mean, std), Resize((128, 128))))
         model.dataset_kwargs = {"root": "celeba", 
                                 "download": True, 
-                                "transform": Compose((ToTensor(), Resize((128, 128))))}
+                                "transform": model.transform}
 
     else:
         print("unsupported dataset")
@@ -158,9 +114,9 @@ def main():
     #send model to cuda before initializing optimizer
     if torch.cuda.is_available():
         model = model.cuda()
-
-    optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate, betas=(0.9, 0.9))
     
+    optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate, betas=(0.9, 0.9))
+
     if args.checkpoint is not None:
         checkpoint = torch.load(args.checkpoint)
         model.load_state_dict(checkpoint["model_state_dict"])
@@ -174,17 +130,18 @@ def main():
                       optimizer=optimizer,
                       beta=args.beta,
                       epochs=args.epochs,
-                      batch_size=args.batch_size)
+                      batch_size=args.batch_size,
+                      mixture_net_only=args.mixture_net_only)
 
     if args.reconstruct != []:
-        imgs = load_images(args.reconstruct)
+        imgs = load_images(args.reconstruct, model.transform)
         imgs = reconstruct(model, imgs)
 
         for img, filename in zip(imgs, args.reconstruct):
             ToPILImage()(img.squeeze(0)).save(f"reconstructed.jpg")
 
     if args.interpolate != []:
-        img_0, img_1 = load_images(args.interpolate).split(1)
+        img_0, img_1 = load_images(args.interpolate, model.transform).split(1)
         interpolations = interpolate(model,
                                      img_0,
                                      img_1,
@@ -201,15 +158,13 @@ def main():
         montage.save("random_montage.jpg")
 
 
-def load_images(img_paths):
+def load_images(img_paths, transform):
     """
     Lead a list of pathnames, preprocess, return as a tensor with shape:
     N x 3 x H x W
     """
     
     if img_paths != []:
-        #transform = Compose((ToTensor(), Resize(IMG_SIZE), Normalize((0.5, 0.5, 0.5), (1, 1, 1))))
-        transform = Compose((ToTensor(), Resize((32, 32))))
         imgs = [transform(Image.open(path).convert("RGB")).unsqueeze(0) for path in img_paths]
         return torch.cat(imgs)
 
@@ -283,16 +238,18 @@ def reconstruct(model, img):
         img = img.cuda()
 
     model.eval()
-    
     return model.reconstruct(img)
 
 def train(model,
           optimizer,
           beta=1.0,
           epochs=50,
-          batch_size=32):
+          batch_size=32,
+          mixture_net_only=False):
     """
     Train the model using supplied hyperparameters.
+
+    train_enc_dec controls whether the encoder and decoder should be trained, or only the mixture net.
     """
 
     dataloader = DataLoader(model.dataset,
@@ -320,7 +277,13 @@ def train(model,
             if torch.cuda.is_available():
                 batch = batch.cuda()
             
-            loss, loss_kl, loss_nll, grad_norm =  train_step(model, optimizer, beta, batch, scaler)
+            loss, loss_kl, loss_nll, grad_norm =  train_step(model,
+                                                             optimizer,
+                                                             beta,
+                                                             batch,
+                                                             scaler,
+                                                             mixture_net_only)
+
             samples_sec = samples / (time() - epoch_start)
 
             print(f"{model.epoch.item():9} {samples_sec: 9.2e} {grad_norm: 9.2e} {loss: 9.2e} {loss_kl: 9.2e} {loss_nll: 9.2e}")
@@ -329,33 +292,36 @@ def train(model,
         torch.save({"model_state_dict": model.state_dict(),
                     "optimizer_state_dict": optimizer.state_dict()}, 
                     f"checkpoints/model_{model.start_time.item()}_{model.epoch.item()}")
+        print()
 
     return model
 
 
-def train_step(model, optimizer, beta, batch, scaler):
+def train_step(model, optimizer, beta, batch, scaler, mixture_net_only):
     """
     Take one training step for a given batch of data.
     """
-  
+
     try:
         #auto mixed precision
-        with torch.cuda.amp.autocast():
+        #with torch.cuda.amp.autocast():
+        if True:
 
-            #project the sample to the latent dimensional space
-            activations = model.encode(batch)
-            
-            #reconstruct the original sample from the latent dimension representation
-            #batch_prime = model.decode(activations)
-            tensor = model.decode(activations)
+            #don't train the encoder/decoder if mixture net only is set
+            with torch.set_grad_enabled(not mixture_net_only):
+                #project the sample to the latent dimensional space
+                activations = model.encode(batch)
+                
+                #reconstruct the original sample from the latent dimension representation
+                #batch_prime = model.decode(activations)
+                tensor = model.decode(activations)
+
+                #get the KL divergence loss from the model
+                loss_kl = model.get_loss_kl().mean()
+
+            #get the negative log likelihood from the mixture net    
             loss_nll = model.get_nll(tensor, batch).mean()
 
-            #get the KL divergence loss from the model
-            loss_kl = model.get_loss_kl().mean()
-
-            #calculate the reconstruction loss
-            #loss_recon = torch.nn.functional.mse_loss(batch_prime, batch)
-            
             #sum the losses
             loss = (beta * loss_kl) + loss_nll
 
@@ -378,7 +344,7 @@ def train_step(model, optimizer, beta, batch, scaler):
         scaler.update()
        
         optimizer.zero_grad()
-       
+
         return loss.item(), loss_kl.item(), loss_nll.item(), grad_norm.item()
 
     except ValueError:
