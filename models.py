@@ -17,6 +17,7 @@ from torch.distributions import Normal
 from torch.nn.functional import interpolate, log_softmax
 from torch import logsumexp, sigmoid, tanh
 from time import time
+from vae_helpers import DmolNet, draw_gaussian_diag_samples, gaussian_analytical_kl
 
 class VAE(nn.Module):
     """
@@ -36,11 +37,27 @@ class VAE(nn.Module):
         self.register_buffer("start_time", torch.tensor([int(time())], dtype=int))
 
         #function pointers to corresponding encoder/decoder functions
-        self.encode = self.encoder.forward
         self.decode = self.decoder.forward
         self.sample = self.decoder.sample
         self.get_loss_kl = self.decoder.get_loss_kl
-        self.get_nll = self.decoder.get_nll
+
+    def get_nll(self, tensor, target):
+        """
+        Apply the target scaling function for the loss and pass to the decoder.
+        """
+    
+        target = self.transform_target(target)
+
+        return self.decoder.get_nll(tensor, target)
+
+    def encode(self, tensor):
+        """
+        Apply the model input transform and pass to encoder.
+        """
+        
+        tensor = self.transform_in(tensor)
+
+        return self.encoder.forward(tensor)
 
     def reconstruct(self, tensor):
         """
@@ -48,8 +65,9 @@ class VAE(nn.Module):
         """
 
         activations = self.encode(tensor)
-        
-        return self.decoder.reconstruct(activations)
+        px_z = self.decode(activations)
+        img = self.decoder.out_net.sample(px_z)
+        return img
 
 class Encoder(nn.Module):
     """
@@ -115,8 +133,9 @@ class Decoder(nn.Module):
 
         self.out_conv = nn.Conv2d(channels, 3, kernel_size=3, padding=1)
         self.mixture_net = MixtureNet(10, channels)
+        self.out_net = DmolNet(channels, 10)
 
-    def forward(self, activations=None, temp=1):
+    def forward(self, activations=None, temp=0):
         """
         Perform a forward pass through the decoder.
         """
@@ -140,7 +159,7 @@ class Decoder(nn.Module):
 
         return tensor
 
-    def sample(self, n_samples, temp=1):
+    def sample(self, n_samples, temp=0):
         """
         Sample from the model.  Temperature controls the variance of the distributions the latent
         encodings are drawn from.  A higher temperature leads to higher variance and more dynamic
@@ -149,23 +168,25 @@ class Decoder(nn.Module):
         
         tensor = self.forward(activations=None, temp=temp)
     
-        return self.mixture_net.sample(tensor)
+        #return self.mixture_net.sample(tensor)
+        return self.out_net.sample(tensor)
 
-    def reconstruct(self, activations):
+    def reconstruct(self, activations, temp=0):
         """
         Perform a forward pass through the decoder.
         """
-        
         tensor = self.forward(activations=activations)
         
-        return self.mixture_net.sample(tensor)
+        #return self.mixture_net.sample(tensor)
+        return self.out_net.sample(tensor, temp=temp)
  
     def get_nll(self, tensor, target):
         """
         Get the negative log likelihood of the tensor given target tensor.
         """
 
-        return self.mixture_net(tensor, target)      
+        #return self.mixture_net(tensor, target)      
+        return self.out_net.nll(tensor, target.permute(0, 2, 3, 1))      
 
     def get_loss_kl(self):
         """
@@ -212,7 +233,7 @@ class EncoderGroup(nn.Module):
         mid_kernel = 3 if resolution > 2 else 1
 
         for _ in range(n_blocks):
-            self.encoder_blocks.append(Block(channels, mid_channels, channels, mid_kernel=mid_kernel, final_scale=final_scale))
+            self.encoder_blocks.append(Block(channels, mid_channels, channels, mid_kernel=mid_kernel, final_scale=final_scale, res=True))
         
        
     def forward(self, tensor):
@@ -224,12 +245,23 @@ class EncoderGroup(nn.Module):
         if tensor.shape[-1] != self.resolution:
             kernel_size = tensor.shape[-1] // self.resolution
             tensor = nn.functional.avg_pool2d(tensor, kernel_size)
- 
-        tensor = self.encoder_blocks.forward(tensor)
+
+        #the original VDVAE uses the activations of the 2nd to last encoder block at each H/W
+        #except the final 1x1, then the final activation is stored
+        #to make use of the pretrained weights we do the same here
+        for encoder_block in self.encoder_blocks[:-1]:
+            tensor = encoder_block.forward(tensor)
         
         #store the activations
         self.activations = tensor
-       
+
+        #pass through the final decoder block
+        tensor = self.encoder_blocks[-1].forward(tensor)
+
+        #store the final activations if this is the N x C x 1 x 1 encoder group
+        if self.resolution == 1:
+            self.activations = tensor
+
         return tensor
 
 
@@ -258,7 +290,7 @@ class DecoderGroup(nn.Module):
         if bias:
             self.bias = nn.Parameter(torch.zeros((1, channels, resolution, resolution)))
 
-    def forward(self, tensor, activations=None, temp=1):
+    def forward(self, tensor, activations=None, temp=0):
         """
         Perform the forward pass through this group.
         """
@@ -324,7 +356,7 @@ class DecoderBlock(nn.Module):
 
         self.z_projection.weight.data *= final_scale
 
-    def forward(self, tensor, activations=None, temp=1):
+    def forward(self, tensor, activations=None, temp=0):
         """
         Perform a forward pass through the convolution module.  This method is used when training
         and when sampling from the model.  The main difference  is which distribution the latent
@@ -332,42 +364,70 @@ class DecoderBlock(nn.Module):
         during sampling z is drawn from the prior p(z).
  
         Note:  A ValueError during the creation of either normal distribution is a sign the 
-        learning rate is too high.  The mins/maxs of p_logvar have been observed to trend toward
-        inf/-inf when the LR is too high and training collapses.  The magnitude of the mean/logvar
+        learning rate is too high.  The mins/maxs of p_logstd have been observed to trend toward
+        inf/-inf when the LR is too high and training collapses.  The magnitude of the mean/logstd
         tend to increase as the tensor resolution increases.
         """      
-       
-        #get the mean, log-variance of p, and the residual flow to the main path
+
+        if activations is None:
+            return self.sample(tensor, activations, temp)
+             
+        #get the mean/log-standard-deviation of q
+        q_mean, q_logstd = self.phi(torch.cat((tensor, activations), dim=1)).chunk(2, dim=1)
+
+        #get q = N(q_mean, q_std)
+        q_dist = Normal(q_mean, torch.exp(q_logstd))
+      
+        #get the mean, log-standard-deviation of p, and the residual flow to the main path
         theta = self.theta(tensor)
-        p_mean, p_logvar, res = torch.tensor_split(theta, (self.z_channels, 2 * self.z_channels), dim=1)
+        p_mean, p_logstd, res = torch.tensor_split(theta, (self.z_channels, 2 * self.z_channels), dim=1)
 
         #get p = N(p_mean, p_std)
-        p_dist = Normal(p_mean, torch.exp(p_logvar / 2))
+        p_dist = Normal(p_mean, torch.exp(p_logstd))
 
         #join the output from theta with the main branch
         tensor = tensor + res
 
-        if activations is not None:
-            #non-None activations indicates training, build/sample z from q
-            
-            #get the mean/log-variance of q
-            q_mean, q_logvar = self.phi(torch.cat((tensor, activations), dim=1)).chunk(2, dim=1)
+        #get reparameterized sample from N(q_mean, q_std)
+        z_rsample = q_dist.rsample()
 
-            #get q = N(q_mean, q_std)
-            q_dist = Normal(q_mean, torch.exp(q_logvar / 2))
+        #calculate the KL divergence between p and q
+        self.loss_kl = kl_divergence(q_dist, p_dist)
+        
+        #project z to the proper dimensions and join with main branch
+        tensor = tensor + self.z_projection(z_rsample)
 
-            #get reparameterized sample from N(q_mean, q_std)
-            z_rsample = q_dist.rsample()
+        #pass through the res block
+        tensor = self.res(tensor)
 
-            #calculate the KL divergence between p and q
-            self.loss_kl = kl_divergence(p_dist, q_dist)
+        return tensor
 
-        else:
-            #None activations indicates sampling, sample z from p
+    def sample(self, tensor, activations=None, temp=0):
+        """
+        Perform a forward pass through the convolution module.  This method is used when training
+        and when sampling from the model.  The main difference  is which distribution the latent
+        variable z is drawn from.  During training z is drawn from the posterior q(z|x), whereas
+        during sampling z is drawn from the prior p(z).
+ 
+        Note:  A ValueError during the creation of either normal distribution is a sign the 
+        learning rate is too high.  The mins/maxs of p_logstd have been observed to trend toward
+        inf/-inf when the LR is too high and training collapses.  The magnitude of the mean/logstd
+        tend to increase as the tensor resolution increases.
+        """      
 
-            #get reparameterized sample from N(p_mean, p_std)
-            z_rsample = p_dist.rsample()
+        #get the mean, log-standard-deviation of p, and the residual flow to the main path
+        theta = self.theta(tensor)
+        p_mean, p_logstd, res = torch.tensor_split(theta, (self.z_channels, 2 * self.z_channels), dim=1)
 
+        #get p = N(p_mean, p_std)
+        p_dist = Normal(p_mean, temp * torch.exp(p_logstd))
+
+        #join the output from theta with the main branch
+        tensor = tensor + res
+
+        #get reparameterized sample from N(p_mean, p_std)
+        z_rsample = p_dist.rsample()
+        
         #project z to the proper dimensions and join with main branch
         tensor = tensor + self.z_projection(z_rsample)
 
