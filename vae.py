@@ -17,6 +17,7 @@ from PIL import Image
 from configs import get_model
 
 GRAD_CLIP = 200
+EMA_SCALER = 0.99
 
 def main():
     """
@@ -63,6 +64,10 @@ def main():
         checkpoint = torch.load(args.checkpoint)
         model.load_state_dict(checkpoint["model_state_dict"])
         optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+
+        #override the loaded learning rate with that specified in the args
+        for param_group in optimizer.param_groups:
+                param_group['lr'] = args.learning_rate
 
     if args.train:
         #load the dataset only if training
@@ -131,7 +136,8 @@ def sample(model, n_samples, temp=1.0):
     Get a number of random samples from the decoder.
     """
 
-    return [(model.sample(1, temp=temp)).clamp(0, 1) for _ in range(n_samples)]
+    with torch.no_grad():
+        return [(model.sample(1, temp=temp)).clamp(0, 1) for _ in range(n_samples)]
 
 
 def interpolate(model, img_0, img_1, n_interpolations=3):
@@ -165,10 +171,7 @@ def reconstruct(model, img):
     """
 
     with torch.no_grad():
-        img = img.to(model.device)
-
-        model.eval()
-        return model.reconstruct(img)
+        return model.reconstruct(img.to(model.device))
 
 def train(model,
           optimizer,
@@ -189,7 +192,12 @@ def train(model,
                             prefetch_factor=batch_size,
                             drop_last=True)
 
-    #use mixed-precision loss/gradient scaler
+    samples = 0
+    
+    #initialize exponential moving averages
+    loss_ema, loss_kl_ema, loss_nll_ema, grad_norm_ema = (torch.inf,) * 4
+ 
+    #initialize mixed-precision loss/gradient scaler
     scaler = torch.cuda.amp.GradScaler()
 
     for _ in range(epochs):
@@ -199,23 +207,27 @@ def train(model,
 
         model.epoch += 1
         epoch_start = time()
-        samples = 0
-
+        
+       
         for batch, *_ in dataloader:
-            samples += batch.shape[0]
             batch = batch.to(model.device)
             
-            loss, loss_kl, loss_nll, grad_norm =  train_step(model,
-                                                             optimizer,
-                                                             beta,
-                                                             batch,
-                                                             scaler,
-                                                             mixture_net_only)
-
+            stats = train_step(model, optimizer, beta, batch, scaler, mixture_net_only)
+            loss, loss_kl, loss_nll, grad_norm = stats
+           
+            if all(stat not in (torch.nan, torch.inf, -torch.inf) for stat in stats):
+                #update running stats only if no extreme values 
+                samples += batch.shape[0]
+                loss_ema = ema_update(loss_ema, loss)
+                loss_kl_ema = ema_update(loss_kl_ema, loss_kl)
+                loss_nll_ema = ema_update(loss_nll_ema, loss_nll)
+                grad_norm_ema = ema_update(grad_norm_ema, grad_norm)
+            
             samples_sec = samples / (time() - epoch_start)
 
             print(f"{model.epoch.item():9} {samples_sec: 9.2e} {grad_norm: 9.2e} {loss: 9.2e} {loss_kl: 9.2e} {loss_nll: 9.2e}")
-
+            print(f"{'':9} {' EMAs':9} {grad_norm_ema: 9.2e} {loss_ema: 9.2e} {loss_kl_ema: 9.2e} {loss_nll_ema: 9.2e}")
+            print()
         #save the model weights
         torch.save({"model_state_dict": model.state_dict(),
                     "optimizer_state_dict": optimizer.state_dict()}, 
@@ -232,8 +244,7 @@ def train_step(model, optimizer, beta, batch, scaler, mixture_net_only):
 
     try:
         #auto mixed precision
-        #with torch.cuda.amp.autocast():
-        if True:
+        with torch.cuda.amp.autocast():
 
             #don't train the encoder/decoder if mixture net only is set
             with torch.set_grad_enabled(not mixture_net_only):
@@ -279,6 +290,21 @@ def train_step(model, optimizer, beta, batch, scaler, mixture_net_only):
         #the decoder may sporadically throw a value error when creating the p distribution
         #if this happens abort the training step
         return torch.inf, torch.inf, torch.inf, torch.inf
+
+
+def ema_update(ema, val):
+    """
+    Perform an ema update given a new value.
+    """
+
+    if ema is torch.inf:
+        #ema is initialized with an inf value
+        ema = val
+
+    else:
+        ema = (ema * EMA_SCALER) + ((1 - EMA_SCALER) * val)
+
+    return ema
 
 
 if __name__ == "__main__":
