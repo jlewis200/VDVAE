@@ -42,6 +42,7 @@ def get_model(config):
         #mean/std used by VDVAE to scale targets for the loss function
         #map [0, 1] to [-1, 1]
         model.transform_target = Compose((Normalize(0.5, 0.5), Resize((32, 32))))
+        #model.transform_target = lambda x: x 
 
     elif config == "ffhq256":
         encoder_layers = [

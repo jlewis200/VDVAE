@@ -37,23 +37,74 @@ def transfer_weights(model, save_path, donor_weights):
         for parameter in model.parameters():
             assert(parameter.sum() == 0)
 
+ 
+        #disect dmolnet weights
+        #this uses the same confusing steps in the original but the reshapes/slicing is at the first dims instead of the last
+        dmll_net = model.decoder.dmll_net 
+        
+        conv_weight = state_dict.pop("decoder.out_net.out_conv.weight")
+        #shape 100 x 512 x 1 x 1
+
+        conv_bias = state_dict.pop("decoder.out_net.out_conv.bias")
+        #shape 100
+       
+        dmll_net.logits.weight.data = conv_weight[0 : 10]
+        dmll_net.logits.bias.data = conv_bias[0 : 10]
+
+        conv_weight = torch.reshape(conv_weight[10:], (3, 30) + conv_weight.shape[1:])
+        conv_bias   = torch.reshape(conv_bias[10:], (3, 30))
+
+        means_weight = conv_weight[:, 0:10]
+        means_bias = conv_bias[:, 0:10]
+ 
+        log_scales_weight = conv_weight[:, 10:20]
+        log_scales_bias = conv_bias[:, 10:20]
+ 
+        coeffs_weight = conv_weight[:, 20:30]
+        coeffs_bias = conv_bias[:, 20:30]
+
+        #dmll_net.r_mean.weight.data = means_weight[0]
+        dmll_net.r_mean.weight.data = means_weight[0]
+        dmll_net.r_logscale.weight.data = log_scales_weight[0]
+        dmll_net.gr_coeff.weight.data = coeffs_weight[0]
+        
+        dmll_net.r_mean.bias.data = means_bias[0]
+        dmll_net.r_logscale.bias.data = log_scales_bias[0]
+        dmll_net.gr_coeff.bias.data = coeffs_bias[0]
+
+        dmll_net.g_mean.weight.data = means_weight[1]
+        dmll_net.g_logscale.weight.data = log_scales_weight[1]
+        dmll_net.br_coeff.weight.data = coeffs_weight[1]
+        
+        dmll_net.g_mean.bias.data = means_bias[1]
+        dmll_net.g_logscale.bias.data = log_scales_bias[1]
+        dmll_net.br_coeff.bias.data = coeffs_bias[1]
+
+        dmll_net.b_mean.weight.data = means_weight[2]
+        dmll_net.b_logscale.weight.data = log_scales_weight[2]
+        dmll_net.bg_coeff.weight.data = coeffs_weight[2]
+        
+        dmll_net.b_mean.bias.data = means_bias[2]
+        dmll_net.b_logscale.bias.data = log_scales_bias[2]
+        dmll_net.bg_coeff.bias.data = coeffs_bias[2]
+    
         #reinitialize the mixture_net weights
-        model.decoder.mixture_net.dist_r_0.reset_parameters()
-        model.decoder.mixture_net.dist_r_1.reset_parameters()
-        model.decoder.mixture_net.dist_g_0.reset_parameters()
-        model.decoder.mixture_net.dist_g_1.reset_parameters()
-        model.decoder.mixture_net.dist_b_0.reset_parameters()
-        model.decoder.mixture_net.dist_b_1.reset_parameters()
-        model.decoder.mixture_net.mix_score.reset_parameters()
+        #model.decoder.mixture_net.dist_r_0.reset_parameters()
+        #model.decoder.mixture_net.dist_r_1.reset_parameters()
+        #model.decoder.mixture_net.dist_g_0.reset_parameters()
+        #model.decoder.mixture_net.dist_g_1.reset_parameters()
+        #model.decoder.mixture_net.dist_b_0.reset_parameters()
+        #model.decoder.mixture_net.dist_b_1.reset_parameters()
+        #model.decoder.mixture_net.mix_score.reset_parameters()
 
         #reinitialize the out_conv weights
-        model.decoder.out_conv.reset_parameters()
+        #model.decoder.out_conv.reset_parameters()
 
         #misc
         transfer_item(model.encoder.in_conv.weight, state_dict, "encoder.in_conv.weight")
         transfer_item(model.encoder.in_conv.bias, state_dict, "encoder.in_conv.bias")
-        transfer_item(model.decoder.out_net.out_conv.weight, state_dict, "decoder.out_net.out_conv.weight")
-        transfer_item(model.decoder.out_net.out_conv.bias, state_dict, "decoder.out_net.out_conv.bias")
+        #transfer_item(model.decoder.out_net.out_conv.weight, state_dict, "decoder.out_net.out_conv.weight")
+        #transfer_item(model.decoder.out_net.out_conv.bias, state_dict, "decoder.out_net.out_conv.bias")
 
 
         #encoder blocks

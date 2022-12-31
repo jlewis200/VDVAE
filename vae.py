@@ -228,6 +228,14 @@ def train(model,
             print(f"{model.epoch.item():9} {samples_sec: 9.2e} {grad_norm: 9.2e} {loss: 9.2e} {loss_kl: 9.2e} {loss_nll: 9.2e}")
             print(f"{'':9} {' EMAs':9} {grad_norm_ema: 9.2e} {loss_ema: 9.2e} {loss_kl_ema: 9.2e} {loss_nll_ema: 9.2e}")
             print()
+
+            if time() - epoch_start > 600:
+                #save the model weights
+                torch.save({"model_state_dict": model.state_dict(),
+                            "optimizer_state_dict": optimizer.state_dict()}, 
+                            f"checkpoints/model_{model.start_time.item()}_{model.epoch.item()}.pt")
+                return
+ 
         #save the model weights
         torch.save({"model_state_dict": model.state_dict(),
                     "optimizer_state_dict": optimizer.state_dict()}, 
@@ -244,7 +252,8 @@ def train_step(model, optimizer, beta, batch, scaler, mixture_net_only):
 
     try:
         #auto mixed precision
-        with torch.cuda.amp.autocast():
+        #with torch.cuda.amp.autocast():
+        if True:
 
             #don't train the encoder/decoder if mixture net only is set
             with torch.set_grad_enabled(not mixture_net_only):
