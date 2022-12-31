@@ -5,6 +5,7 @@ Variational Auto Encoder
 """
 
 
+import math
 from argparse import ArgumentParser
 from time import time
 
@@ -215,7 +216,7 @@ def train(model,
             stats = train_step(model, optimizer, beta, batch, scaler, mixture_net_only)
             loss, loss_kl, loss_nll, grad_norm = stats
            
-            if all(stat not in (torch.nan, torch.inf, -torch.inf) for stat in stats):
+            if all(not math.isnan(stat) and stat not in (torch.nan, torch.inf, -torch.inf) for stat in stats):
                 #update running stats only if no extreme values 
                 samples += batch.shape[0]
                 loss_ema = ema_update(loss_ema, loss)
@@ -252,8 +253,7 @@ def train_step(model, optimizer, beta, batch, scaler, mixture_net_only):
 
     try:
         #auto mixed precision
-        #with torch.cuda.amp.autocast():
-        if True:
+        with torch.cuda.amp.autocast():
 
             #don't train the encoder/decoder if mixture net only is set
             with torch.set_grad_enabled(not mixture_net_only):

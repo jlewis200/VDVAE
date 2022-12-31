@@ -32,6 +32,8 @@ def get_model(config):
         dataset_kwargs = {"root": "cifar10", 
                           "download": True, 
                           "transform": ToTensor()}
+        
+        #use a lambda so we can set the config but delay loading until we're sure we want to train
         model.get_dataset = lambda: CIFAR10(**dataset_kwargs)
        
         #mean/std used by VDVAE to scale model input
@@ -68,7 +70,7 @@ def get_model(config):
             {"channels": 512, "n_blocks":  8, "resolution": 128, "bias": False},
             {"channels": 512, "n_blocks":  1, "resolution": 256, "bias": False}]
 
-        model = VAE(encoder_layers, decoder_layers, low_bit=True)
+        model = VAE(encoder_layers, decoder_layers, bits=5)
 
         #use a lambda so we can set the config but delay loading until we're sure we want to train
         model.get_dataset = lambda: TensorDataset(torch.from_numpy(np.load("ffhq256/ffhq-256.npy")))

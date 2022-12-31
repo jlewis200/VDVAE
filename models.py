@@ -24,11 +24,11 @@ class VAE(nn.Module):
     VAE Encoder/Decoder using stride 1 convolutions and avgpool/interpolate for down/up sampling.
     """
 
-    def __init__(self, encoder_layers, decoder_layers, low_bit=False):
+    def __init__(self, encoder_layers, decoder_layers, bits=8):
         super().__init__()
         
         self.encoder = Encoder(encoder_layers)
-        self.decoder = Decoder(decoder_layers, low_bit=low_bit)
+        self.decoder = Decoder(decoder_layers, bits=bits)
         
         #register the training epoch and start time so it is saved with the model's state_dict
         self.register_buffer("epoch", torch.tensor([0], dtype=int))
@@ -158,7 +158,7 @@ class Decoder(nn.Module):
     VAE Decoder class.
     """
 
-    def __init__(self, layers, low_bit=False):
+    def __init__(self, layers, bits=8):
         super().__init__()
         
         #get the total number of blocks for weight scaling
@@ -177,10 +177,7 @@ class Decoder(nn.Module):
         self.gain = nn.Parameter(torch.ones((1, channels, 1, 1)))
         self.bias = nn.Parameter(torch.zeros((1, channels, 1, 1)))
 
-        #self.out_conv = nn.Conv2d(channels, 3, kernel_size=3, padding=1)
-        #self.mixture_net = MixtureNet(10, channels)
-        #self.out_net = DmolNet(channels, 10, low_bit)
-        self.dmll_net = DmllNet(channels, 10, 8)
+        self.dmll_net = DmllNet(channels, 10, bits=bits)
 
     def forward(self, activations=None, temp=0):
         """
