@@ -193,7 +193,6 @@ def train(model,
                             prefetch_factor=batch_size,
                             drop_last=True)
 
-    samples = 0
     
     #initialize exponential moving averages
     loss_ema, loss_kl_ema, loss_nll_ema, grad_norm_ema = (torch.inf,) * 4
@@ -206,9 +205,8 @@ def train(model,
         print(f"{'':>9} {'sample/':>9} {'gradient':>9} {'overall':>9} {'KL':>9} {'mixture':>9}")
         print(f"{'epoch':>9} {'sec':>9} {'norm':>9} {'loss':>9} {'div':>9} {'NLL':>9}") 
 
-        model.epoch += 1
+        samples = 0
         epoch_start = time()
-        
        
         for batch, *_ in dataloader:
             batch = batch.to(model.device)
@@ -230,14 +228,16 @@ def train(model,
             print(f"{'':9} {' EMAs':9} {grad_norm_ema: 9.2e} {loss_ema: 9.2e} {loss_kl_ema: 9.2e} {loss_nll_ema: 9.2e}")
             print()
 
-            if time() - epoch_start > 600:
+            if time() - epoch_start > 3600:
                 #save the model weights
                 torch.save({"model_state_dict": model.state_dict(),
                             "optimizer_state_dict": optimizer.state_dict()}, 
                             f"checkpoints/model_{model.start_time.item()}_{model.epoch.item()}.pt")
-                return
+                epoch_start = time()
+                samples = 0
  
         #save the model weights
+        model.epoch += 1
         torch.save({"model_state_dict": model.state_dict(),
                     "optimizer_state_dict": optimizer.state_dict()}, 
                     f"checkpoints/model_{model.start_time.item()}_{model.epoch.item()}.pt")
@@ -253,8 +253,7 @@ def train_step(model, optimizer, beta, batch, scaler, mixture_net_only):
 
     try:
         #auto mixed precision
-        #with torch.cuda.amp.autocast():
-        if True:
+        with torch.cuda.amp.autocast():
 
             #don't train the encoder/decoder if mixture net only is set
             with torch.set_grad_enabled(not mixture_net_only):
@@ -287,8 +286,7 @@ def train_step(model, optimizer, beta, batch, scaler, mixture_net_only):
         if grad_norm < GRAD_CLIP:
 
             #take an optimization step using the gradient scaler
-            #scaler.step(optimizer)
-            pass
+            scaler.step(optimizer)
 
         #update the scaler paramters
         scaler.update()
