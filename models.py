@@ -662,12 +662,8 @@ class DmllNet(nn.Module):
         Find the negative log likelihood of the target given a mixture of dist distributions
         parameterized by the output of the decoder net.
         """
-        
-        dec_out = torch.load("../vdvae/px_z").to(dec_out.device)
-        target = torch.load("../vdvae/x").permute(0, 3, 1, 2) 
 
         target = target.to(dec_out.device)
-
         
         #the Betas generate samples of shape N x n_mixtures x H x W
         #expand/repeat the target tensor along the singleton color channels, maintain 4 dimensions
@@ -680,18 +676,13 @@ class DmllNet(nn.Module):
         
         #get the log probabilities of the target given the dists with current parameters
         #shape N x n_mixtures x H x W
-        #TODO:  figure out if centering is necessary
         log_prob_r = dist_r.log_prob(target_r)
         log_prob_g = dist_g.log_prob(target_g)
         log_prob_b = dist_b.log_prob(target_b)
         
-        
         #sum the log probabilities of each color channel and modify by the softmax of the  mixture score
         #shape N x n_mixtures x H x W
-        #TODO:  Idk if log_softmax is necessary if I specify as logits for the Categorical distribution
         log_prob = log_prob_r + log_prob_g + log_prob_b + log_softmax(log_prob_mix, dim=1)
-        breakpoint()
-
         
         #exponentiate, sum, take log along the dimension of each dist
         #shape N x H x W
@@ -699,10 +690,10 @@ class DmllNet(nn.Module):
 
         #scale by the number of elements per batch item
         #shape N
-        log_prob = log_prob.sum(dim=(1, 2)) / target[0].numel()
+        nll = -log_prob.sum(dim=(1, 2)) / target[0].numel()
 
-        #return the negation of the log likelihood suitable for minimization
-        return -log_prob
+        #return the negative log likelihood suitable for minimization
+        return nll
 
     def get_distributions(self, dec_out, target_r, target_g, target_b):
         """
@@ -755,7 +746,6 @@ class DiscreteLogistic(TransformedDistribution):
         self.half_width = (1 / ((2**bits) - 1))
         self._mean = mean
         
-        #base_distribution = Uniform(torch.zeros_like(mean, dtype=torch.float64), torch.ones_like(mean, dtype=torch.float64))
         base_distribution = Uniform(torch.zeros_like(mean), torch.ones_like(mean))
         transforms = [SigmoidTransform().inv, AffineTransform(loc=mean, scale=scale)]
         super().__init__(base_distribution, transforms)
@@ -773,6 +763,7 @@ class DiscreteLogistic(TransformedDistribution):
         prob_threshold = 1e-5
 
         #use the non-discrete log-probability as a base
+        #this value is used when prob < prob_threshold (indicating the distribution parameters are off by quite a bit)
         log_prob = super().log_prob(value)
  
         #find the discrete non-log probability of laying within the bucket
@@ -785,20 +776,11 @@ class DiscreteLogistic(TransformedDistribution):
 
         #edge case at 0:  replace 0 with cdf(0 + half_half_width)
         mask = value < -0.999
-        log_prob[mask] = self.cdf(value + self.half_width).log()[mask]
+        log_prob[mask] = self.cdf(value + self.half_width)[mask].log()
 
         #edge case at 1:  replace 1 with (1 - cdf(1 - half bucket list))
         mask = value > 0.999
-        log_prob[mask] = (1 - self.cdf(value - self.half_width)).log()[mask]
+        log_prob[mask] = (1 - self.cdf(value - self.half_width))[mask].log()
 
         return log_prob
 
-    def log_prob2(self, value):
-        
-        return super().log_prob(value)
-
-    def mean(self):
-        """
-        """
-
-        return self._mean
