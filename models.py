@@ -482,166 +482,6 @@ class Block(nn.Sequential):
         return out_tensor
 
 
-class MixtureNet(nn.Module):
-    """
-    The output of the encoder is fed to the MixtureNet.  Here the probability distribution of a
-    pixel's value is modeled by a mixture of distributions parameterized by the decoder output.
-    """
-
-    def __init__(self, n_mixtures, channels, link_scaler=2):
-        super().__init__()
-
-        self.n_mixtures = n_mixtures
-        self.link_scaler = link_scaler #used to scale the output of the link function
-
-        #convs for generating dist parameters for the red sub-pixel
-        self.dist_r_0 = nn.Conv2d(channels, n_mixtures, 1)
-        self.dist_r_1 = nn.Conv2d(channels, n_mixtures, 1)
-        
-        #convs for generating dist parameters for the green sub-pixel
-        self.dist_g_0 = nn.Conv2d(channels, n_mixtures, 1)
-        self.dist_g_1 = nn.Conv2d(channels, n_mixtures, 1)
-        
-        #convs for generating dist parameters for the blue sub-pixel
-        self.dist_b_0 = nn.Conv2d(channels, n_mixtures, 1)
-        self.dist_b_1 = nn.Conv2d(channels, n_mixtures, 1)
-
-        #conv for generating the mixture score
-        self.mix_score = nn.Conv2d(channels, n_mixtures, 1)
-
-    def link(self, tensor):
-        #link function between the parameter conv output and the dist distributions
-        #input range (-inf, inf), output range (0, link_scaler)
-        #return 1 + (0.2 * sigmoid(tensor))
-        return tensor
-
-    def forward(self, dec_out, target):
-        """
-        Find the negative log likelihood of the target given a mixture of dist distributions
-        parameterized by the output of the decoder net.
-        """
-       
-        CLAMP = (-torch.inf, torch.inf)
-
-        dist_r, dist_g, dist_b, log_prob_mix = self.get_distributions(dec_out)
-        
-        #the Betas generate samples of shape N x n_mixtures x H x W
-        #expand/repeat the target tensor along the singleton color channels, maintain 4 dimensions
-        #shape N x n_mixtures x H x W
-        target_r = target[:, 0:1].expand(-1, self.n_mixtures, -1, -1)
-        target_g = target[:, 1:2].expand(-1, self.n_mixtures, -1, -1)
-        target_b = target[:, 2:3].expand(-1, self.n_mixtures, -1, -1)
-
-        #get the log probabilities of the target given the dists with current parameters
-        #shape N x n_mixtures x H x W
-        log_prob_r = dist_r.log_prob(target_r)
-        log_prob_g = dist_g.log_prob(target_g)
-        log_prob_b = dist_b.log_prob(target_b)
-        
-        #clamp inf values
-        log_prob_r = log_prob_r.clamp(*CLAMP)
-        log_prob_g = log_prob_g.clamp(*CLAMP)
-        log_prob_b = log_prob_b.clamp(*CLAMP)
-        
-        #sum the log probabilities of each color channel and modify by the softmax of the  mixture score
-        #shape N x n_mixtures x H x W
-        log_prob = log_prob_r + log_prob_g + log_prob_b + log_prob_mix
-
-        log_prob = log_prob.clamp(*CLAMP)
-        
-        #exponentiate, sum, take log along the dimension of each dist
-        #shape N x H x W
-        log_prob = logsumexp(log_prob, dim=1)
-
-        #clamp inf values
-        log_prob = log_prob.clamp(*CLAMP)
-
-        #scale by the number of elements per batch item
-        #shape N
-        log_prob = log_prob.sum(dim=(1, 2)) / target[0].numel()
-
-        #clamp inf values
-        log_prob = log_prob.clamp(*CLAMP)
-
-        #return the negation of the log likelihood suitable for minimization
-        return -log_prob
-
-    def sample(self, dec_out):
-        """
-        Sample from a mixture of dist distributions
-        parameterized by the output of the decoder net.
-        """
-        
-        dist_r, dist_g, dist_b, log_prob_mix = self.get_distributions(dec_out)
-        
-        #choose 1 of n_mixtures distributions based on their log probabilities
-        indexes = Categorical(logits=log_prob_mix.permute(0, 2, 3, 1)).sample()
-
-        #get the color channels based on the indexes
-        color_r = dist_r.sample()
-        color_g = dist_g.sample()
-        color_b = dist_b.sample()
-
-
-        #TODO figure out this indexing
-        #this creates a tensor shaped like the color samples:  N x n_mixtures x H x W
-        #assigns a value of 1 to the channel corresponding with the selected distribution
-        #all others are zero
-        indexes2 = torch.zeros_like(color_r)
-        for idx in range(color_r.shape[2]):
-            for jdx in range(color_r.shape[3]):
-                channel = indexes[0, idx, jdx]
-                indexes2[0, channel, idx, jdx] = 1.0
-
-        #pointwise multiplies with the color samples and sums along the channels axis
-        #now all values are zeroed except those of the selected distributions
-        color_r = (color_r * indexes2).sum(dim=1)
-        color_g = (color_g * indexes2).sum(dim=1)
-        color_b = (color_b * indexes2).sum(dim=1)
-        #these are now shaped N x 1 x H x W
-
-        #stack the color channels
-        img = torch.cat((color_r, color_g, color_b), dim=0).unsqueeze(0)
-        #shape N x 3 x H x W
-
-        return img
-
-    def get_distributions(self, dec_out):
-        """
-        """
-
-        #dist parameters for the red sub-pixel distributions
-        #shape N x n_mixtures x H x W
-        dist_r_0 = self.link(self.dist_r_0(dec_out))
-        dist_r_1 = self.link(self.dist_r_1(dec_out))
-        
-        #dist parameters for the blue sub-pixel distributions
-        #shape N x n_mixtures x H x W
-        dist_g_0 = self.link(self.dist_g_0(dec_out))
-        dist_g_1 = self.link(self.dist_g_1(dec_out))
- 
-        #dist parameters for the green sub-pixel distributions
-        #shape N x n_mixtures x H x W
-        dist_b_0 = self.link(self.dist_b_0(dec_out))
-        dist_b_1 = self.link(self.dist_b_1(dec_out))
- 
-        #log probability of each mixture for each distribution
-        #shape N x n_mixtures x H x W
-        log_prob_mix = log_softmax(self.mix_score(dec_out), dim=1)
-
-        #initialize the distributions
-        #shape N x n_mixtures x H x W
-        #dist_r = Beta(dist_r_0, dist_r_1)
-        #dist_g = Beta(dist_g_0, dist_g_1)
-        #dist_b = Beta(dist_b_0, dist_b_1)
-
-        dist_r = Normal(dist_r_0, torch.exp(dist_r_1))
-        dist_g = Normal(dist_g_0, torch.exp(dist_g_1))
-        dist_b = Normal(dist_b_0, torch.exp(dist_b_1))
-
-        return dist_r, dist_g, dist_b, log_prob_mix
-
-
 class DmllNet(nn.Module):
     """
     """
@@ -692,7 +532,7 @@ class DmllNet(nn.Module):
         log_prob_r = dist_r.log_prob(target_r)
         log_prob_g = dist_g.log_prob(target_g)
         log_prob_b = dist_b.log_prob(target_b)
-        
+
         #sum the log probabilities of each color channel and modify by the softmax of the  mixture score
         #shape N x n_mixtures x H x W
         log_prob = log_prob_r + log_prob_g + log_prob_b + log_softmax(log_prob_mix, dim=1)
@@ -820,7 +660,6 @@ class DmllNet(nn.Module):
         return img
 
 
-
 class DiscreteLogistic(TransformedDistribution):
     """
     """
@@ -849,22 +688,22 @@ class DiscreteLogistic(TransformedDistribution):
         #use the non-discrete log-probability as a base
         #this value is used when prob < prob_threshold (indicating the distribution parameters are off by quite a bit)
         log_prob = super().log_prob(value)
- 
+        
         #find the discrete non-log probability of laying within the bucket
-        prob = (self.cdf(value + self.half_width) - self.cdf(value - self.half_width)).clamp(min=stability)
+        prob = (self.cdf(value + self.half_width) - self.cdf(value - self.half_width))
         
         #if the non-log probability is above a threshold, 
         #replace continuous log-probability with the discrete log-probability
         mask = prob > prob_threshold
-        log_prob[mask] = prob[mask].log()
+        log_prob[mask] = prob[mask].clamp(min=stability).log()
 
         #edge case at 0:  replace 0 with cdf(0 + half_half_width)
         mask = value < -0.999
-        log_prob[mask] = self.cdf(value + self.half_width)[mask].log()
+        log_prob[mask] = self.cdf(value + self.half_width)[mask].clamp(min=stability).log()
 
         #edge case at 1:  replace 1 with (1 - cdf(1 - half bucket list))
         mask = value > 0.999
-        log_prob[mask] = (1 - self.cdf(value - self.half_width))[mask].log()
+        log_prob[mask] = (1 - self.cdf(value - self.half_width))[mask].clamp(min=stability).log()
 
         return log_prob
 
