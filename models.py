@@ -696,11 +696,13 @@ class DiscreteLogistic(TransformedDistribution):
 
         #edge case at 0:  replace 0 with cdf(0 + half_half_width)
         mask = value < -0.999
-        log_prob[mask] = self.cdf(value + self.half_width)[mask].clamp(min=stability).log()
+        #log_prob[mask] = self.cdf(value + self.half_width)[mask].clamp(min=stability).log()
+        log_prob[mask] = self.cdf(value + self.half_width)[mask].log()
 
         #edge case at 1:  replace 1 with (1 - cdf(1 - half bucket list))
         mask = value > 0.999
-        log_prob[mask] = (1 - self.cdf(value - self.half_width))[mask].clamp(min=stability).log()
+        #log_prob[mask] = (1 - self.cdf(value - self.half_width))[mask].clamp(min=stability).log()
+        log_prob[mask] = (1 - self.cdf(value - self.half_width))[mask].log()
 
         return log_prob
 

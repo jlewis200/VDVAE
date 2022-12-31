@@ -253,7 +253,8 @@ def train_step(model, optimizer, beta, batch, scaler, mixture_net_only):
 
     try:
         #auto mixed precision
-        with torch.cuda.amp.autocast():
+        #with torch.cuda.amp.autocast():
+        if True:
 
             #don't train the encoder/decoder if mixture net only is set
             with torch.set_grad_enabled(not mixture_net_only):
@@ -286,7 +287,8 @@ def train_step(model, optimizer, beta, batch, scaler, mixture_net_only):
         if grad_norm < GRAD_CLIP:
 
             #take an optimization step using the gradient scaler
-            scaler.step(optimizer)
+            #scaler.step(optimizer)
+            pass
 
         #update the scaler paramters
         scaler.update()
