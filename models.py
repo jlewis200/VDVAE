@@ -87,9 +87,14 @@ class VAE(nn.Module):
         Reconstruct an image.
         """
 
+        #get the posterior
         px_z = self.decode(self.encode(tensor))
-        
-        return self.decoder.out_net.sample(px_z)
+       
+        #sample from the reconstruction network
+        sample = self.decoder.out_net.sample(px_z)
+
+        #scale to [0, 1]
+        return (sample / 2) + 0.5
 
 class Encoder(nn.Module):
     """
@@ -203,7 +208,9 @@ class Decoder(nn.Module):
         px_z = self.forward(activations=None, temp=temp)
    
         #sample from the reconstruction network
-        return self.out_net.sample(px_z)
+        sample = self.dmll_net.sample(px_z)
+
+        return (sample / 2) + 0.5
 
     def reconstruct(self, activations, temp=0):
         """
@@ -735,6 +742,77 @@ class DmllNet(nn.Module):
         dlog_b = DiscreteLogistic(b_mean, torch.exp(b_logscale), self.bits)
 
         return dlog_r, dlog_g, dlog_b, logits
+
+    def sample(self, dec_out):
+        """
+        """
+        
+        #dist parameters for the red sub-pixel distributions
+        #shape N x n_mixtures x H x W
+        r_mean = self.r_mean(dec_out)
+        r_logscale = self.r_logscale(dec_out).clamp(min=-7)
+        
+        #dist parameters for the blue sub-pixel distributions
+        #shape N x n_mixtures x H x W
+        g_mean = self.g_mean(dec_out)
+        g_logscale = self.g_logscale(dec_out).clamp(min=-7)
+        gr_coeff = torch.tanh(self.gr_coeff(dec_out))
+ 
+        #dist parameters for the green sub-pixel distributions
+        #shape N x n_mixtures x H x W
+        b_mean = self.b_mean(dec_out)
+        b_logscale = self.b_logscale(dec_out).clamp(min=-7)
+        br_coeff = torch.tanh(self.br_coeff(dec_out))
+        bg_coeff = torch.tanh(self.bg_coeff(dec_out))
+
+        #log probability of each mixture for each distribution
+        #shape N x n_mixtures x H x W
+        logits = self.logits(dec_out)
+
+        #choose 1 of n_mixtures distributions per-pixel, based on their log probabilities
+        indexes = Categorical(logits=logits.permute(0, 2, 3, 1)).sample()
+
+        #mix the mean of green sub-pixel with red
+        #this relates the green sub-pixel to the red sub-pixel for conditional sampling
+        g_mean = g_mean + (gr_coeff * r_mean)
+
+        #mix the mean of blue sub-pixel with red/green
+        #this relates the blue sub-pixel to the red/green sub-pixels for conditional sampling
+        b_mean = b_mean + (br_coeff * r_mean) + (bg_coeff * g_mean)
+
+        #initialize the distributions
+        dlog_r = DiscreteLogistic(r_mean, torch.exp(r_logscale), self.bits)
+        dlog_g = DiscreteLogistic(g_mean, torch.exp(g_logscale), self.bits)
+        dlog_b = DiscreteLogistic(b_mean, torch.exp(b_logscale), self.bits)
+
+        #get the color channels based on the indexes
+        color_r = dlog_r.sample()
+        color_g = dlog_g.sample()
+        color_b = dlog_b.sample()
+
+        #TODO figure out this indexing
+        #this creates a tensor shaped like the color samples:  N x n_mixtures x H x W
+        #assigns a value of 1 to the channel corresponding with the selected distribution
+        #all others are zero
+        indexes2 = torch.zeros_like(color_r)
+        for idx in range(color_r.shape[2]):
+            for jdx in range(color_r.shape[3]):
+                channel = indexes[0, idx, jdx]
+                indexes2[0, channel, idx, jdx] = 1.0
+
+        #pointwise multiplies with the color samples and sums along the channels axis
+        #now all values are zeroed except those of the selected distributions
+        color_r = (color_r * indexes2).sum(dim=1)
+        color_g = (color_g * indexes2).sum(dim=1)
+        color_b = (color_b * indexes2).sum(dim=1)
+        #these are now shaped N x 1 x H x W
+
+        #stack the color channels
+        img = torch.cat((color_r, color_g, color_b), dim=0).unsqueeze(0).clamp(-1, 1)
+        #shape N x 3 x H x W
+
+        return img
+
 
 
 class DiscreteLogistic(TransformedDistribution):
