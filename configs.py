@@ -74,10 +74,12 @@ def get_model(config):
         std = 0.272842979
         model.transform_in = Compose((Normalize(mean, std), Resize((256, 256))))
 
-        #mean/std used by VDVAE to scale targets for the loss function
-        #map [0, 1] to [-1, 1]
+        #map PIL range [0, 1] -> loss target range [-1, 1]
         model.transform_target = Compose((Normalize(0.5, 0.5), Resize((256, 256))))
-        
+
+        #map reconstruction range [-1, 1] to PIL range [0, 1]
+        model.transform_out = Compose((Normalize(-1, 2), Resize((256, 256))))       
+
     elif config == "celeba":
         encoder_layers = [
             {"channels": 512, "n_blocks":  3, "resolution": 128},

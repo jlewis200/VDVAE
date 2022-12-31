@@ -18,8 +18,6 @@ from torch.nn.functional import interpolate, log_softmax
 from torch import logsumexp, sigmoid, tanh
 from time import time
 
-from vae_helpers import DmolNet
-
 
 class VAE(nn.Module):
     """
@@ -40,7 +38,6 @@ class VAE(nn.Module):
 
         #function pointers to corresponding encoder/decoder functions
         self.decode = self.decoder.forward
-        self.sample = self.decoder.sample
         self.get_loss_kl = self.decoder.get_loss_kl
 
     @property
@@ -91,10 +88,21 @@ class VAE(nn.Module):
         px_z = self.decode(self.encode(tensor))
        
         #sample from the reconstruction network
-        sample = self.decoder.out_net.sample(px_z)
+        sample = self.decoder.dmll_net.sample(px_z)
 
-        #scale to [0, 1]
-        return (sample / 2) + 0.5
+        #apply the output transformation
+        return self.transform_out(sample)
+
+    def sample(self, n_samples, temp=1.0):
+        """
+        Sample from the model.
+        """
+       
+        #sample from the decoder
+        sample = self.decoder.sample(n_samples, temp)
+
+        #apply the output transformation
+        return self.transform_out(sample)
 
 class Encoder(nn.Module):
     """
@@ -208,9 +216,7 @@ class Decoder(nn.Module):
         px_z = self.forward(activations=None, temp=temp)
    
         #sample from the reconstruction network
-        sample = self.dmll_net.sample(px_z)
-
-        return (sample / 2) + 0.5
+        return self.dmll_net.sample(px_z)
 
     def reconstruct(self, activations, temp=0):
         """
