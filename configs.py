@@ -43,6 +43,10 @@ def get_model(config):
         #map [0, 1] to [-1, 1]
         model.transform_target = Compose((Normalize(0.5, 0.5), Resize((32, 32))))
 
+        #map reconstruction range [-1, 1] to PIL range [0, 1]
+        model.transform_out = Compose((Normalize(-1, 2), Resize((256, 256))))       
+
+
     elif config == "ffhq256":
         encoder_layers = [
             {"channels": 512, "n_blocks":  4, "resolution": 256},
