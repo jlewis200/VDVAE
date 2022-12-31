@@ -685,11 +685,13 @@ class DmllNet(nn.Module):
         log_prob_g = dist_g.log_prob(target_g)
         log_prob_b = dist_b.log_prob(target_b)
         
+        
         #sum the log probabilities of each color channel and modify by the softmax of the  mixture score
         #shape N x n_mixtures x H x W
+        #TODO:  Idk if log_softmax is necessary if I specify as logits for the Categorical distribution
         log_prob = log_prob_r + log_prob_g + log_prob_b + log_softmax(log_prob_mix, dim=1)
-
         breakpoint()
+
         
         #exponentiate, sum, take log along the dimension of each dist
         #shape N x H x W
@@ -726,7 +728,6 @@ class DmllNet(nn.Module):
         
         #log probability of each mixture for each distribution
         #shape N x n_mixtures x H x W
-        #TODO:  I don't think this is necessary if I specify as logits for the Categorical distribution
         logits = self.logits(dec_out)
 
         #mix the mean of green sub-pixel with red
@@ -754,6 +755,7 @@ class DiscreteLogistic(TransformedDistribution):
         self.half_width = (1 / ((2**bits) - 1))
         self._mean = mean
         
+        #base_distribution = Uniform(torch.zeros_like(mean, dtype=torch.float64), torch.ones_like(mean, dtype=torch.float64))
         base_distribution = Uniform(torch.zeros_like(mean), torch.ones_like(mean))
         transforms = [SigmoidTransform().inv, AffineTransform(loc=mean, scale=scale)]
         super().__init__(base_distribution, transforms)
@@ -761,32 +763,39 @@ class DiscreteLogistic(TransformedDistribution):
 
     def log_prob(self, value):
         """
+        The DiscreteLogistic distribution is built from a TransformedDistribution to create a
+        continuous logistic distribution.  This log_prob function uses the TransformedDistribution's
+        cdf() and log_prob() functions to return the discretized log probability of value.
         """
 
         #use a numerical stability term to prevent log(0)
         stability = 1e-12
-        #stability = 1e-20
+        prob_threshold = 1e-5
 
-        #get the discrete log prob for non edge cases
-        #log_prob = (self.cdf(value + self.half_width) - \
-        #            self.cdf(value - self.half_width) + \
-        #            stability).log()
-        log_prob = (self.cdf(value + self.half_width) - \
-                    self.cdf(value - self.half_width)).clamp(min=stability).log()
+        #use the non-discrete log-probability as a base
+        log_prob = super().log_prob(value)
+ 
+        #find the discrete non-log probability of laying within the bucket
+        prob = (self.cdf(value + self.half_width) - self.cdf(value - self.half_width)).clamp(min=stability)
+        
+        #if the non-log probability is above a threshold, 
+        #replace continuous log-probability with the discrete log-probability
+        mask = prob > prob_threshold
+        log_prob[mask] = prob[mask].log()
 
-        ##edge case at 0:  replace 0 with cdf(0 + half_half_width)
+        #edge case at 0:  replace 0 with cdf(0 + half_half_width)
         mask = value < -0.999
-        #log_prob[mask] = (self.cdf(value + self.half_width) + stability).log()[mask]
-        #log_prob[mask] = self.cdf(value + self.half_width).clamp(min=stability).log()[mask]
-        log_prob[mask] = self.cdf(value + self.half_width).clamp(min=stability).log()[mask]
+        log_prob[mask] = self.cdf(value + self.half_width).log()[mask]
 
         #edge case at 1:  replace 1 with (1 - cdf(1 - half bucket list))
         mask = value > 0.999
-        #log_prob[mask] = (1 - self.cdf(value - self.half_width) + stability).log()[mask]
-        #log_prob[mask] = (1 - self.cdf(value - self.half_width)).clamp(min=stability).log()[mask]
-        log_prob[mask] = (1 - self.cdf(value - self.half_width)).clamp(min=stability).log()[mask]
+        log_prob[mask] = (1 - self.cdf(value - self.half_width)).log()[mask]
 
         return log_prob
+
+    def log_prob2(self, value):
+        
+        return super().log_prob(value)
 
     def mean(self):
         """
