@@ -8,6 +8,7 @@ from models import VAE
 from torchvision.datasets import CelebA, CIFAR10
 from torch.utils.data import TensorDataset
 from torchvision.transforms import ToTensor, ToPILImage, Compose, Resize, RandomHorizontalFlip, Normalize
+from torchvision.transforms.functional import resize, normalize
 
 def get_model(config):
     """
@@ -75,13 +76,41 @@ def get_model(config):
         #use a lambda to set the config but delay loading until training
         model.get_dataset = lambda: TensorDataset(torch.from_numpy(np.load("ffhq256/ffhq-256.npy")))
        
-        #mean/std used by VDVAE to scale model input
-        mean = 0.440885452
-        std = 0.272842979
-        model.transform_in = Compose((Normalize(mean, std), Resize((256, 256))))
+       
+        def transform_in(tensor):
+            """
+            Transformation to apply to the input.
+            """
+            
+            #the ffhq dataset is stored as uint8 N x H x W x C
+            #convert to float [0, 1] N x C x H x W
+            if tensor.dtype == torch.uint8:
+                tensor = tensor.to(torch.float32) / 255
+                tensor = tensor.permute(0, 3, 1, 2)
 
+            #mean/std used by VDVAE to scale model input
+            mean = 0.440885452
+            std = 0.272842979
+            
+            return resize(normalize(tensor, mean, std), (256, 256))
+ 
+        model.transform_in = transform_in 
+
+        def transform_target(tensor):
+            """
+            Transformation to apply to the target.
+            """
+            
+            #the ffhq dataset is stored as uint8 N x H x W x C
+            #convert to float [0, 1] N x C x H x W
+            if tensor.dtype == torch.uint8:
+                tensor = tensor.to(torch.float32) / 255
+                tensor = tensor.permute(0, 3, 1, 2)
+
+            return resize(normalize(tensor, 0.5, 0.5), (256, 256))
+ 
         #map PIL range [0, 1] -> loss target range [-1, 1]
-        model.transform_target = Compose((Normalize(0.5, 0.5), Resize((256, 256))))
+        model.transform_target = transform_target
 
         #map reconstruction range [-1, 1] to PIL range [0, 1]
         model.transform_out = Compose((Normalize(-1, 2), Resize((256, 256))))       

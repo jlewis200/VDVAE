@@ -53,13 +53,6 @@ class VAE(nn.Module):
         Apply the loss target transform and pass to the decoder.
         """
  
-        #TODO:  find a better way to do this
-        #the ffhq dataset is stored in [0, 255]
-        if target.dtype == torch.uint8:
-            target = target.to(torch.float32) / 255
-            target = target.permute(0, 3, 1, 2)
-
-   
         target = self.transform_target(target)
 
         return self.decoder.get_nll(tensor, target)
@@ -68,12 +61,6 @@ class VAE(nn.Module):
         """
         Apply the model input transform and pass to encoder.
         """
-
-        #TODO:  find a better way to do this
-        #the ffhq dataset is stored in [0, 255]
-        if tensor.dtype == torch.uint8:
-            tensor = tensor.to(torch.float32) / 255
-            tensor = tensor.permute(0, 3, 1, 2)
 
         tensor = self.transform_in(tensor)
 
@@ -158,7 +145,7 @@ class Decoder(nn.Module):
     VAE Decoder class.
     """
 
-    def __init__(self, layers, bits=8):
+    def __init__(self, layers, n_mixtures=10, bits=8):
         super().__init__()
         
         #get the total number of blocks for weight scaling
@@ -177,7 +164,7 @@ class Decoder(nn.Module):
         self.gain = nn.Parameter(torch.ones((1, channels, 1, 1)))
         self.bias = nn.Parameter(torch.zeros((1, channels, 1, 1)))
 
-        self.dmll_net = DmllNet(channels, 10, bits=bits)
+        self.dmll_net = DmllNet(channels, n_mixtures, bits=bits)
 
     def forward(self, activations=None, temp=0):
         """
@@ -186,11 +173,11 @@ class Decoder(nn.Module):
 
         if activations is not None:
             #non-None activations indicates a training pass
-            tensor = torch.zeros_like(activations[self.decoder_groups[0].resolution], requires_grad=True)
+            tensor = torch.zeros_like(activations[self.decoder_groups[0].resolution])
 
         else:
             #None activations indicates a sampling pass
-            tensor = torch.zeros_like(self.decoder_groups[0].bias, requires_grad=True)
+            tensor = torch.zeros_like(self.decoder_groups[0].bias)
 
         tensor = tensor.to(self.gain.device)
 
@@ -231,8 +218,6 @@ class Decoder(nn.Module):
         Get the negative log likelihood of the tensor given target tensor.
         """
 
-        #return self.mixture_net(tensor, target)      
-        #return self.out_net.nll(tensor, target)      
         return self.dmll_net.get_nll(tensor, target)      
 
     def get_loss_kl(self):
@@ -266,7 +251,12 @@ class EncoderGroup(nn.Module):
         mid_kernel = 3 if resolution > 2 else 1
 
         for _ in range(n_blocks):
-            self.encoder_blocks.append(Block(channels, mid_channels, channels, mid_kernel=mid_kernel, final_scale=final_scale, res=True))
+            self.encoder_blocks.append(Block(channels,
+                                             mid_channels,
+                                             channels,
+                                             mid_kernel=mid_kernel,
+                                             final_scale=final_scale,
+                                             res=True))
         
     def forward(self, tensor):
         """
@@ -327,7 +317,7 @@ class DecoderGroup(nn.Module):
 
         #the input tensor will be None for the first decoder group
         if tensor is None:
-            tensor = torch.zeros_like(self.bias, requires_grad=True)
+            tensor = torch.zeros_like(self.bias)
         
         #upsample the output of the previous decoder group to match the reolution of this decoder group
         tensor = interpolate(tensor, self.resolution)
@@ -341,7 +331,6 @@ class DecoderGroup(nn.Module):
             tensor = decoder_block(tensor, activations=activations, temp=temp)
 
         return tensor
-
 
     def get_loss_kl(self):
         """
@@ -377,6 +366,7 @@ class DecoderBlock(nn.Module):
         self.z_projection = nn.Conv2d(self.z_channels, channels, kernel_size=1)
         self.res = Block(channels, mid_channels, channels, res=True, mid_kernel=mid_kernel, final_scale=final_scale)
 
+        #scale the z projection weights as per VDVAE
         self.z_projection.weight.data *= final_scale
 
     def forward(self, tensor, activations=None, temp=0):
@@ -517,67 +507,77 @@ class DmllNet(nn.Module):
         
         #the Betas generate samples of shape N x n_mixtures x H x W
         #expand/repeat the target tensor along the singleton color channels, maintain 4 dimensions
-        #shape N x n_mixtures x H x W
         target_r = target[:, 0:1].expand(-1, self.n_mixtures, -1, -1)
         target_g = target[:, 1:2].expand(-1, self.n_mixtures, -1, -1)
         target_b = target[:, 2:3].expand(-1, self.n_mixtures, -1, -1)
+        #shape N x n_mixtures x H x W
 
         dist_r, dist_g, dist_b, log_prob_mix = self.get_distributions(dec_out, target_r, target_g, target_b)
         
         #get the log probabilities of the target given the dists with current parameters
-        #shape N x n_mixtures x H x W
         log_prob_r = dist_r.log_prob(target_r)
         log_prob_g = dist_g.log_prob(target_g)
         log_prob_b = dist_b.log_prob(target_b)
+        #shape N x n_mixtures x H x W
 
         #sum the log probabilities of each color channel and modify by the softmax of the  mixture score
-        #shape N x n_mixtures x H x W
         log_prob = log_prob_r + log_prob_g + log_prob_b + log_softmax(log_prob_mix, dim=1)
+        #shape N x n_mixtures x H x W
         
         #exponentiate, sum, take log along the dimension of each dist
-        #shape N x H x W
         log_prob = logsumexp(log_prob, dim=1)
+        #shape N x H x W
 
         #scale by the number of elements per batch item
-        #shape N
         nll = -log_prob.sum(dim=(1, 2)) / target[0].numel()
+        #shape N
 
         #return the negative log likelihood suitable for minimization
         return nll
 
     def get_distributions(self, dec_out, target_r, target_g, target_b):
         """
+        Get the distributions for training.
         """
         
         #dist parameters for the red sub-pixel distributions
-        #shape N x n_mixtures x H x W
         r_mean = self.r_mean(dec_out)
         r_logscale = self.r_logscale(dec_out).clamp(min=-7)
+        #shape N x n_mixtures x H x W
         
         #dist parameters for the blue sub-pixel distributions
-        #shape N x n_mixtures x H x W
         g_mean = self.g_mean(dec_out)
         g_logscale = self.g_logscale(dec_out).clamp(min=-7)
+        #shape N x n_mixtures x H x W
+        
+
+        #green-red mixing coefficient
         gr_coeff = torch.tanh(self.gr_coeff(dec_out))
+        #shape N x n_mixtures x H x W
  
         #dist parameters for the green sub-pixel distributions
-        #shape N x n_mixtures x H x W
         b_mean = self.b_mean(dec_out)
         b_logscale = self.b_logscale(dec_out).clamp(min=-7)
+        #shape N x n_mixtures x H x W
+        
+        #blue-red/blue-green mixing coefficient
         br_coeff = torch.tanh(self.br_coeff(dec_out))
         bg_coeff = torch.tanh(self.bg_coeff(dec_out))
+        #shape N x n_mixtures x H x W
         
         #log probability of each mixture for each distribution
-        #shape N x n_mixtures x H x W
         logits = self.logits(dec_out)
+        #shape N x n_mixtures x H x W
 
         #mix the mean of green sub-pixel with red
         #this relates the green sub-pixel to the red sub-pixel for conditional sampling
         g_mean = g_mean + (gr_coeff * target_r)
+        #shape N x n_mixtures x H x W
 
         #mix the mean of blue sub-pixel with red/green
         #this relates the blue sub-pixel to the red/green sub-pixels for conditional sampling
         b_mean = b_mean + (br_coeff * target_r) + (bg_coeff * target_g)
+        #shape N x n_mixtures x H x W
 
         #initialize the distributions
         dlog_r = DiscreteLogistic(r_mean, torch.exp(r_logscale), self.bits)
@@ -588,57 +588,68 @@ class DmllNet(nn.Module):
 
     def sample(self, dec_out):
         """
+        Sample from the discrete logistic distribution.
         """
         
         #dist parameters for the red sub-pixel distributions
-        #shape N x n_mixtures x H x W
         r_mean = self.r_mean(dec_out)
         r_logscale = self.r_logscale(dec_out).clamp(min=-7)
+        #shape N x n_mixtures x H x W
         
         #dist parameters for the blue sub-pixel distributions
-        #shape N x n_mixtures x H x W
         g_mean = self.g_mean(dec_out)
         g_logscale = self.g_logscale(dec_out).clamp(min=-7)
+        #shape N x n_mixtures x H x W
+
+        #green-red mixing coefficient
         gr_coeff = torch.tanh(self.gr_coeff(dec_out))
+        #shape N x n_mixtures x H x W
  
         #dist parameters for the green sub-pixel distributions
         #shape N x n_mixtures x H x W
         b_mean = self.b_mean(dec_out)
         b_logscale = self.b_logscale(dec_out).clamp(min=-7)
+        #shape N x n_mixtures x H x W
+
+        #blue-red/blue-green mixing coefficient
         br_coeff = torch.tanh(self.br_coeff(dec_out))
         bg_coeff = torch.tanh(self.bg_coeff(dec_out))
+        #shape N x n_mixtures x H x W
 
         #mix the mean of green sub-pixel with red
         #this relates the green sub-pixel to the red sub-pixel for conditional sampling
         g_mean = g_mean + (gr_coeff * r_mean)
+        #shape N x n_mixtures x H x W
 
         #mix the mean of blue sub-pixel with red/green
         #this relates the blue sub-pixel to the red/green sub-pixels for conditional sampling
         b_mean = b_mean + (br_coeff * r_mean) + (bg_coeff * g_mean)
+        #shape N x n_mixtures x H x W
 
         #initialize the distributions
         dlog_r = DiscreteLogistic(r_mean, torch.exp(r_logscale), self.bits)
         dlog_g = DiscreteLogistic(g_mean, torch.exp(g_logscale), self.bits)
         dlog_b = DiscreteLogistic(b_mean, torch.exp(b_logscale), self.bits)
 
-        #get the color channels based on the indexes
+        #get the color channel samples from all n_mixtures
         color_r = dlog_r.sample()
         color_g = dlog_g.sample()
         color_b = dlog_b.sample()
+        #shape N x n_mixtures x H x W
 
         #log probability of each mixture for each distribution
-        #shape N x n_mixtures x H x W
         logits = self.logits(dec_out)
+        #shape N x n_mixtures x H x W
 
         #choose 1 of n_mixtures distributions per-pixel, based on their log probabilities
         #torch Categorical treats the last dim as the category
-        #permute the n_mixtures dimension to the final dimensions
-        #shape N x H x W
+        #permute the n_mixtures dimension to the final dimension and sample
         indexes = Categorical(logits=logits.permute(0, 2, 3, 1)).sample()
+        #shape N x H x W, value: an int in [0, n_mixtures - 1]
 
         #one hot encode the final dimension and permute to mixture dimension
-        #shape N x n_mixtures x H x W
         indexes = one_hot(indexes).permute(0, 3, 1, 2)
+        #shape N x n_mixtures x H x W
 
         #indexes now has a value of 1 in the channel corresponding with the selected distribution
         #all others are zero
@@ -661,10 +672,14 @@ class DiscreteLogistic(TransformedDistribution):
     """
 
     def __init__(self, mean, scale, bits=8):
+        #bits parameterizes the width of the discretization bucket
+        #higher bits -> smaller buckets
         self.bits = bits
+
+        #half of the width of the bucket
         self.half_width = (1 / ((2**bits) - 1))
-        self._mean = mean
-        
+       
+        #this continuous logistic snippet adapted from pytorch distribution docs
         base_distribution = Uniform(torch.zeros_like(mean), torch.ones_like(mean))
         transforms = [SigmoidTransform().inv, AffineTransform(loc=mean, scale=scale)]
         super().__init__(base_distribution, transforms)
@@ -693,11 +708,11 @@ class DiscreteLogistic(TransformedDistribution):
         mask = prob > prob_threshold
         log_prob[mask] = prob[mask].clamp(min=stability).log()
 
-        #edge case at -1:  replace -1 with cdf(-1 + half_half_width)
+        #edge case at -1:  replace -1 with cdf(-1 + half bucket width)
         mask = value <= -1
         log_prob[mask] = self.cdf(value + self.half_width)[mask].clamp(min=stability).log()
 
-        #edge case at 1:  replace 1 with (1 - cdf(1 - half bucket list))
+        #edge case at 1:  replace 1 with (1 - cdf(1 - half bucket width))
         mask = value >= 1
         log_prob[mask] = (1 - self.cdf(value - self.half_width))[mask].clamp(min=stability).log()
 
