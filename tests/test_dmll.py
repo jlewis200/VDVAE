@@ -31,16 +31,17 @@ class test_dmll(unittest.TestCase):
         """
 
         #the output of the VDVAE decoder network
-        dec_out = torch.load(PATH + "tensors/dmll_cifar10_dec_out.pt").to(DEVICE)
+        dec_out = torch.load(PATH + "tensors/cifar10_decoder_out.pt").to(DEVICE)
 
         #the original input rescaled to [-1, 1]
-        target = torch.load(PATH + "tensors/dmll_cifar10_target.pt").to(DEVICE)
+        target = torch.load(PATH + "tensors/cifar10_target.pt").to(DEVICE)
 
-        #original VDVAE uses the TF standard N x H x W x C, we use pytorch standard N x C x H x W
-        target = target.permute(0, 3, 1, 2) 
+        #original VDVAE uses TF standard N x H x W x C
+        #this implementation uses pytorch standard N x C x H x W
+        target = target.permute(0, 3, 1, 2)
 
         #the negative log likelihood from the original VDVAE
-        nll = torch.load(PATH + "tensors/dmll_cifar10_nll.pt").to(DEVICE)
+        nll = torch.load(PATH + "tensors/cifar10_dmll_nll.pt").to(DEVICE)
 
         #initialize the pretrained model
         model = get_model("cifar10").to(DEVICE)
@@ -67,20 +68,21 @@ class test_dmll(unittest.TestCase):
 
         try:
             #the output of the VDVAE decoder network
-            dec_out = torch.load(PATH + "tensors/dmll_ffhq256_dec_out.pt").to(DEVICE)
+            dec_out = torch.load(PATH + "tensors/ffhq256_decoder_out.pt").to(DEVICE)
 
             #the original input rescaled to [-1, 1]
-            target = torch.load(PATH + "tensors/dmll_ffhq256_target.pt").to(DEVICE)
+            target = torch.load(PATH + "tensors/ffhq256_target.pt").to(DEVICE)
 
-            #original VDVAE uses the TF standard N x H x W x C, we use pytorch standard N x C x H x W
-            target = target.permute(0, 3, 1, 2) 
+            #original VDVAE uses TF standard N x H x W x C
+            #this implementation uses pytorch standard N x C x H x W
+            target = target.permute(0, 3, 1, 2)
 
         except FileNotFoundError:
             #dec_out is ~150MB, so likely too large for github/gitlab
             return
 
         #the negative log likelihood from the original VDVAE
-        nll = torch.load(PATH + "tensors/dmll_ffhq256_nll.pt").to(DEVICE)
+        nll = torch.load(PATH + "tensors/ffhq256_dmll_nll.pt").to(DEVICE)
 
         #initialize the pretrained model
         model = get_model("ffhq256").to(DEVICE)
@@ -105,7 +107,7 @@ class test_dmll(unittest.TestCase):
         of each of the 10 distributions with a uniform sample.  The end result is a categorical
         distribution which chooses 1 of the 10 distributions (per-pixel) according to the probability
         of each distribution captured by the logits.  This implementation uses the pytorch built-in
-        categorical distribution, so the exact distribution chosen for each pixel will not match 
+        categorical distribution, so the exact distribution chosen for each pixel will not match
         between implementations, although there is no perceptible difference between the images.
         For these reasons the MSE is used as the passing metric.
 
@@ -118,17 +120,17 @@ class test_dmll(unittest.TestCase):
 
         try:
             #the output of the VDVAE decoder network
-            dec_out = torch.load(PATH + "tensors/dmll_cifar10_dec_out.pt").to(DEVICE)
+            dec_out = torch.load(PATH + "tensors/cifar10_decoder_out.pt").to(DEVICE)
 
         except FileNotFoundError:
             #dec_out is ~150MB, so likely too large for github/gitlab
             return
 
         #the returned sample from the original VDVAE
-        sample = torch.load(PATH + "tensors/dmll_cifar10_sample.pt").to(DEVICE)
+        sample = torch.load(PATH + "tensors/cifar10_dmll_sample.pt").to(DEVICE)
 
         #original VDVAE uses the TF standard N x H x W x C, we use pytorch standard N x C x H x W
-        sample = sample.permute(0, 3, 1, 2) 
+        sample = sample.permute(0, 3, 1, 2)
 
         #initialize the pretrained model
         model = get_model("cifar10").to(DEVICE)
@@ -151,7 +153,7 @@ class test_dmll(unittest.TestCase):
         of each of the 10 distributions with a uniform sample.  The end result is a categorical
         distribution which chooses 1 of the 10 distributions (per-pixel) according to the probability
         of each distribution captured by the logits.  This implementation uses the pytorch built-in
-        categorical distribution, so the exact distribution chosen for each pixel will not match 
+        categorical distribution, so the exact distribution chosen for each pixel will not match
         between implementations, although there is no perceptible difference between the images.
         For these reasons the MSE is used as the passing metric.
 
@@ -164,17 +166,17 @@ class test_dmll(unittest.TestCase):
 
         try:
             #the output of the VDVAE decoder network
-            dec_out = torch.load(PATH + "tensors/dmll_ffhq256_dec_out.pt").to(DEVICE)
+            dec_out = torch.load(PATH + "tensors/ffhq256_decoder_out.pt").to(DEVICE)
 
         except FileNotFoundError:
             #dec_out is ~150MB, so likely too large for github/gitlab
             return
 
         #the returned sample from the original VDVAE
-        sample = torch.load(PATH + "tensors/dmll_ffhq256_sample.pt").to(DEVICE)
+        sample = torch.load(PATH + "tensors/ffhq256_dmll_sample.pt").to(DEVICE)
 
         #original VDVAE uses the TF standard N x H x W x C, we use pytorch standard N x C x H x W
-        sample = sample.permute(0, 3, 1, 2) 
+        sample = sample.permute(0, 3, 1, 2)
 
         #initialize the pretrained model
         model = get_model("ffhq256").to(DEVICE)
