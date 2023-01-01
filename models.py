@@ -280,7 +280,7 @@ class EncoderGroup(nn.Module):
 
         #the original VDVAE uses the activations of the 2nd to last encoder block at each H/W
         #except the final 1x1, then the final activation is stored
-        #to make use of the pretrained weights we do the same here
+        #to make use of the pretrained weights the same is done here
         for encoder_block in self.encoder_blocks[:-1]:
             tensor = encoder_block.forward(tensor)
         

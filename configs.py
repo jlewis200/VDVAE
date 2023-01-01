@@ -33,7 +33,7 @@ def get_model(config):
                           "download": True, 
                           "transform": ToTensor()}
         
-        #use a lambda so we can set the config but delay loading until we're sure we want to train
+        #use a lambda to set the config but delay loading until training
         model.get_dataset = lambda: CIFAR10(**dataset_kwargs)
        
         #mean/std used by VDVAE to scale model input
@@ -72,7 +72,7 @@ def get_model(config):
 
         model = VAE(encoder_layers, decoder_layers, bits=5)
 
-        #use a lambda so we can set the config but delay loading until we're sure we want to train
+        #use a lambda to set the config but delay loading until training
         model.get_dataset = lambda: TensorDataset(torch.from_numpy(np.load("ffhq256/ffhq-256.npy")))
        
         #mean/std used by VDVAE to scale model input
