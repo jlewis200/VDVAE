@@ -519,6 +519,7 @@ class DmllNet(nn.Module):
         target_b = target[:, 2:3].expand(-1, self.n_mixtures, -1, -1)
         #shape N x n_mixtures x H x W
 
+        #get the distibutions/logits from the decoder output
         dlog_r, dlog_g, dlog_b, logits = self.get_distributions(dec_out, target_r, target_g)
 
         #get the log probabilities of the target given the dists with current parameters
@@ -542,9 +543,9 @@ class DmllNet(nn.Module):
         #return the negative log likelihood suitable for minimization
         return nll
 
-    def get_distributions(self, dec_out, target_r, target_g):
+    def get_distributions(self, dec_out, target_r=None, target_g=None):
         """
-        Get the distributions for training.
+        Get the distributions for training/sampleing.
         """
 
         #dist parameters for the red sub-pixel distributions
@@ -556,7 +557,6 @@ class DmllNet(nn.Module):
         g_mean = self.g_mean(dec_out)
         g_logscale = self.g_logscale(dec_out).clamp(min=-7)
         #shape N x n_mixtures x H x W
-
 
         #green-red mixing coefficient
         gr_coeff = tanh(self.gr_coeff(dec_out))
@@ -572,24 +572,41 @@ class DmllNet(nn.Module):
         bg_coeff = tanh(self.bg_coeff(dec_out))
         #shape N x n_mixtures x H x W
 
-        #log probability of each mixture for each distribution
-        logits = self.logits(dec_out)
-        #shape N x n_mixtures x H x W
+        if target_r is None or target_g is None:
+            #when sampling, g_mean/b_mean are mixed with the distribution means
 
-        #mix the mean of green sub-pixel with red
-        #this relates the green sub-pixel to the red sub-pixel for conditional sampling
-        g_mean = g_mean + (gr_coeff * target_r)
-        #shape N x n_mixtures x H x W
+            #mix the mean of green sub-pixel with red
+            #this relates the green sub-pixel to the red sub-pixel for conditional sampling
+            g_mean = g_mean + (gr_coeff * r_mean)
+            #shape N x n_mixtures x H x W
 
-        #mix the mean of blue sub-pixel with red/green
-        #this relates the blue sub-pixel to the red/green sub-pixels for conditional sampling
-        b_mean = b_mean + (br_coeff * target_r) + (bg_coeff * target_g)
-        #shape N x n_mixtures x H x W
+            #mix the mean of blue sub-pixel with red/green
+            #this relates the blue sub-pixel to the red/green sub-pixels for conditional sampling
+            b_mean = b_mean + (br_coeff * r_mean) + (bg_coeff * g_mean)
+            #shape N x n_mixtures x H x W
+
+        else:
+            #when training, g_mean/b_mean are mixed with the target values
+
+            #mix the mean of green sub-pixel with red
+            #this relates the green sub-pixel to the red sub-pixel for conditional sampling
+            g_mean = g_mean + (gr_coeff * target_r)
+            #shape N x n_mixtures x H x W
+
+            #mix the mean of blue sub-pixel with red/green
+            #this relates the blue sub-pixel to the red/green sub-pixels for conditional sampling
+            b_mean = b_mean + (br_coeff * target_r) + (bg_coeff * target_g)
+            #shape N x n_mixtures x H x W
+
 
         #initialize the distributions
         dlog_r = DiscreteLogistic(r_mean, torch.exp(r_logscale), self.bits)
         dlog_g = DiscreteLogistic(g_mean, torch.exp(g_logscale), self.bits)
         dlog_b = DiscreteLogistic(b_mean, torch.exp(b_logscale), self.bits)
+
+        #log probability of each mixture for each distribution
+        logits = self.logits(dec_out)
+        #shape N x n_mixtures x H x W
 
         return dlog_r, dlog_g, dlog_b, logits
 
@@ -597,55 +614,14 @@ class DmllNet(nn.Module):
         """
         Sample from the discrete logistic distribution.
         """
-
-        #dist parameters for the red sub-pixel distributions
-        r_mean = self.r_mean(dec_out)
-        r_logscale = self.r_logscale(dec_out).clamp(min=-7)
-        #shape N x n_mixtures x H x W
-
-        #dist parameters for the blue sub-pixel distributions
-        g_mean = self.g_mean(dec_out)
-        g_logscale = self.g_logscale(dec_out).clamp(min=-7)
-        #shape N x n_mixtures x H x W
-
-        #green-red mixing coefficient
-        gr_coeff = tanh(self.gr_coeff(dec_out))
-        #shape N x n_mixtures x H x W
-
-        #dist parameters for the green sub-pixel distributions
-        #shape N x n_mixtures x H x W
-        b_mean = self.b_mean(dec_out)
-        b_logscale = self.b_logscale(dec_out).clamp(min=-7)
-        #shape N x n_mixtures x H x W
-
-        #blue-red/blue-green mixing coefficient
-        br_coeff = tanh(self.br_coeff(dec_out))
-        bg_coeff = tanh(self.bg_coeff(dec_out))
-        #shape N x n_mixtures x H x W
-
-        #mix the mean of green sub-pixel with red
-        #this relates the green sub-pixel to the red sub-pixel for conditional sampling
-        g_mean = g_mean + (gr_coeff * r_mean)
-        #shape N x n_mixtures x H x W
-
-        #mix the mean of blue sub-pixel with red/green
-        #this relates the blue sub-pixel to the red/green sub-pixels for conditional sampling
-        b_mean = b_mean + (br_coeff * r_mean) + (bg_coeff * g_mean)
-        #shape N x n_mixtures x H x W
-
-        #initialize the distributions
-        dlog_r = DiscreteLogistic(r_mean, torch.exp(r_logscale), self.bits)
-        dlog_g = DiscreteLogistic(g_mean, torch.exp(g_logscale), self.bits)
-        dlog_b = DiscreteLogistic(b_mean, torch.exp(b_logscale), self.bits)
+       
+        #get the distibutions/distribution-log-probabilities from the decoder output
+        dlog_r, dlog_g, dlog_b, logits = self.get_distributions(dec_out)
 
         #get the color channel samples from all n_mixtures
         color_r = dlog_r.sample()
         color_g = dlog_g.sample()
         color_b = dlog_b.sample()
-        #shape N x n_mixtures x H x W
-
-        #log probability of each mixture for each distribution
-        logits = self.logits(dec_out)
         #shape N x n_mixtures x H x W
 
         #choose 1 of n_mixtures distributions per-pixel, based on their log probabilities
