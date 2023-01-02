@@ -70,3 +70,32 @@ options:
 # Unit tests
 Unit tests can be run from the project root by using the command
 `python3 -m unittest`
+
+# Sampled images
+Note:  Temperature controls the fraction of the trained standard deviation to use when sampling.
+
+## CIFAR 10 (upscaled to 256 x 256)
+Temperature 1.0
+![CIFAR 10 temperature 1.0](imgs/cifar10_1.0.jpg)
+
+Temperature 0.8
+![CIFAR 10 temperature 0.8](imgs/cifar10_0.8.jpg)
+
+Temperature 0.6
+![CIFAR 10 temperature 0.6](imgs/cifar10_0.6.jpg)
+
+## FFHQ 256
+Temperature 1.0
+![FFHQ 256 temperature 1.0](imgs/ffhq256_1.0.jpg)
+
+Temperature 0.8
+![FFHQ 256 temperature 0.8](imgs/ffhq256_0.8.jpg)
+
+Temperature 0.6
+![FFHQ 256 temperature 0.6](imgs/ffhq256_0.6.jpg)
+
+Temperature 0.4
+![FFHQ 256 temperature 0.4](imgs/ffhq256_0.4.jpg)
+
+Temperature 0.3
+![FFHQ 256 temperature 0.3](imgs/ffhq256_0.3.jpg)

@@ -30,7 +30,6 @@ def main():
 
     #options
     parser.add_argument("-t", "--train", action="store_true", help="train the model")
-    parser.add_argument("-b", "--beta", type=float, default=1, help="relative weight of KL divergence loss")
     parser.add_argument("-l", "--learning-rate", type=float, default=0.00015, help="learning rate of optimizer")
     parser.add_argument("-e", "--epochs", type=int, default=50, help="number of training epochs")
     parser.add_argument("-n", "--batch-size", type=int, default=8, help="batch size")
@@ -81,7 +80,6 @@ def main():
 
         model = train(model=model,
                       optimizer=optimizer,
-                      beta=args.beta,
                       epochs=args.epochs,
                       batch_size=args.batch_size,
                       mixture_net_only=args.mixture_net_only)
@@ -182,7 +180,6 @@ def reconstruct(model, img):
 
 def train(model,
           optimizer,
-          beta=1.0,
           epochs=50,
           batch_size=32,
           mixture_net_only=False):
@@ -215,7 +212,7 @@ def train(model,
         for batch, *_ in dataloader:
             batch = batch.to(model.device)
 
-            stats = train_step(model, optimizer, beta, batch, scaler, mixture_net_only)
+            stats = train_step(model, optimizer, batch, scaler, mixture_net_only)
             loss, loss_kl, loss_nll, grad_norm = stats
 
             if all(not math.isnan(stat) and \
@@ -263,7 +260,7 @@ def train(model,
     return model
 
 
-def train_step(model, optimizer, beta, batch, scaler, mixture_net_only):
+def train_step(model, optimizer, batch, scaler, mixture_net_only):
     """
     Take one training step for a given batch of data.
     """
@@ -283,7 +280,7 @@ def train_step(model, optimizer, beta, batch, scaler, mixture_net_only):
         loss_nll = model.get_nll(dec_out, batch).mean()
 
         #sum the losses
-        loss = (beta * loss_kl) + loss_nll
+        loss = loss_kl + loss_nll
 
     #calculate gradients using gradient scaler
     scaler.scale(loss).backward()
