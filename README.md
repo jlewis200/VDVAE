@@ -32,8 +32,8 @@ specified with the `--device` option (ie. `--device cpu`).  See [this](https://p
 
 # Full options list
 ```
-./vdvdvae.py --help
-usage: vdvdvae.py [-h] [-t] [-b BETA] [-l LEARNING_RATE] [-e EPOCHS] [-n BATCH_SIZE] [-m] [-d DEVICE] [--checkpoint CHECKPOINT] [--config CONFIG] [--reconstruct RECONSTRUCT [RECONSTRUCT ...]] [--interpolate INTERPOLATE INTERPOLATE]
+./vdvae.py --help
+usage: vdvae.py [-h] [-t] [-b BETA] [-l LEARNING_RATE] [-e EPOCHS] [-n BATCH_SIZE] [-m] [-d DEVICE] [--checkpoint CHECKPOINT] [--config CONFIG] [--reconstruct RECONSTRUCT [RECONSTRUCT ...]] [--interpolate INTERPOLATE INTERPOLATE]
                 [--interpolations INTERPOLATIONS] [--random RANDOM] [--temperature TEMPERATURE]
 
 Perform VAE experiments
