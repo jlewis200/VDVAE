@@ -1,8 +1,10 @@
 celeba
 cifar10
-checkpoints
 out
+*npy
+*pt
 *jpg
+*tar
 *~
 *swp
 *swo
