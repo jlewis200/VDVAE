@@ -638,7 +638,7 @@ class DmllNet(nn.Module):
         #shape N x H x W, value: an int in [0, n_mixtures - 1]
 
         #one hot encode the final dimension and permute to mixture dimension
-        indexes = one_hot(indexes).permute(0, 3, 1, 2)
+        indexes = one_hot(indexes, num_classes=self.n_mixtures).permute(0, 3, 1, 2)
         #shape N x n_mixtures x H x W
 
         #indexes now has a value of 1 in the channel corresponding with the selected distribution

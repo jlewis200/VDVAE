@@ -33,10 +33,10 @@ def get_model(config):
         dataset_kwargs = {"root": "cifar10", 
                           "download": True, 
                           "transform": ToTensor()}
-        
+
         #use a lambda to set the config but delay loading until training
         model.get_dataset = lambda: CIFAR10(**dataset_kwargs)
-       
+
         #mean/std used by VDVAE to scale model input
         mean = 0.473091686
         std = 0.251636706
@@ -47,7 +47,7 @@ def get_model(config):
         model.transform_target = Compose((Normalize(0.5, 0.5), Resize((32, 32))))
 
         #map reconstruction range [-1, 1] to PIL range [0, 1]
-        model.transform_out = Compose((Normalize(-1, 2), Resize((256, 256))))       
+        model.transform_out = Compose((Normalize(-1, 2), Resize((32, 32))))       
 
 
     elif config == "ffhq256":
@@ -75,8 +75,7 @@ def get_model(config):
 
         #use a lambda to set the config but delay loading until training
         model.get_dataset = lambda: TensorDataset(torch.from_numpy(np.load("ffhq256/ffhq-256.npy")))
-       
-       
+
         def transform_in(tensor):
             """
             Transformation to apply to the input.
@@ -114,34 +113,6 @@ def get_model(config):
 
         #map reconstruction range [-1, 1] to PIL range [0, 1]
         model.transform_out = Compose((Normalize(-1, 2), Resize((256, 256))))       
-
-    elif config == "celeba":
-        encoder_layers = [
-            {"channels": 512, "n_blocks":  3, "resolution": 128},
-            {"channels": 512, "n_blocks":  8, "resolution":  64},
-            {"channels": 512, "n_blocks": 12, "resolution":  32},
-            {"channels": 512, "n_blocks": 17, "resolution":  16},
-            {"channels": 512, "n_blocks":  7, "resolution":   8},
-            {"channels": 512, "n_blocks":  5, "resolution":   4},
-            {"channels": 512, "n_blocks":  4, "resolution":   1}]   
-
-        decoder_layers = [
-            {"channels": 512, "n_blocks":  2, "resolution":   1},
-            {"channels": 512, "n_blocks":  3, "resolution":   4},
-            {"channels": 512, "n_blocks":  4, "resolution":   8},
-            {"channels": 512, "n_blocks":  9, "resolution":  16},
-            {"channels": 512, "n_blocks": 21, "resolution":  32},
-            {"channels": 512, "n_blocks": 13, "resolution":  64, "bias": False},
-            {"channels": 512, "n_blocks":  7, "resolution": 128, "bias": False}]
-
-        model = VDVAE(encoder_layers, decoder_layers)
-        model.dataset = CelebA
-        mean = 0.
-        std = 0.
-        model.transform = Compose((ToTensor(), Normalize(mean, std), Resize((128, 128))))
-        model.dataset_kwargs = {"root": "celeba", 
-                                "download": True, 
-                                "transform": model.transform}
 
     return model
 
