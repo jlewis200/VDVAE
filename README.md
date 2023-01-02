@@ -16,7 +16,7 @@ specified with the `--device` option (ie. `--device cpu`).  See [this](https://p
 `python3 get_checkpoints.py`
 
 ## Sample from a model
-`python3 vae.py --config ffhq256 --checkpoint checkpoints/ffhq256_pretrained.pt --random 8 --temp 1`
+`python3 vdvae.py --config ffhq256 --checkpoint checkpoints/ffhq256_pretrained.pt --random 8 --temp 1`
 
 ## Train a model
 
@@ -25,15 +25,15 @@ specified with the `--device` option (ie. `--device cpu`).  See [this](https://p
  - FFHQ 256 - After downloading, place `ffhq-256.npy` in the `ffhq256` directory like so:  `VDVAE/ffhq256/ffhq-256.npy`.  Refer to the VDVAE documentation [here](https://github.com/openai/vdvae#setup) to download the dataset.
 
 ### Train from scratch
-`python3 vae.py --config cifar10 --train --batch-size 6`
+`python3 vdvae.py --config cifar10 --train --batch-size 6`
 
 ### Train from a checkpoint
-`python3 vae.py --config cifar10 --checkpoint checkpoints/cifar10_pretrained.pt --train --batch-size 20`
+`python3 vdvae.py --config cifar10 --checkpoint checkpoints/cifar10_pretrained.pt --train --batch-size 20`
 
 # Full options list
 ```
-./vdvae.py --help
-usage: vdvae.py [-h] [-t] [-b BETA] [-l LEARNING_RATE] [-e EPOCHS] [-n BATCH_SIZE] [-m] [-d DEVICE] [--checkpoint CHECKPOINT] [--config CONFIG] [--reconstruct RECONSTRUCT [RECONSTRUCT ...]] [--interpolate INTERPOLATE INTERPOLATE]
+./vdvdvae.py --help
+usage: vdvdvae.py [-h] [-t] [-b BETA] [-l LEARNING_RATE] [-e EPOCHS] [-n BATCH_SIZE] [-m] [-d DEVICE] [--checkpoint CHECKPOINT] [--config CONFIG] [--reconstruct RECONSTRUCT [RECONSTRUCT ...]] [--interpolate INTERPOLATE INTERPOLATE]
                 [--interpolations INTERPOLATIONS] [--random RANDOM] [--temperature TEMPERATURE]
 
 Perform VAE experiments
