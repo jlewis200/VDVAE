@@ -7,7 +7,7 @@ import torch
 from pathlib import Path
 from configs import get_model
 from torch.nn.functional import mse_loss
-from models import Block
+from model import Block
 
 #get the path of the source file (not the CWD)
 PATH = str(Path(__file__).parent) + '/'

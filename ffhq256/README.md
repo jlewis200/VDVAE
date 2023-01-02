@@ -1,0 +1,1 @@
+`ffhq-256.npy` should be placed in this directory.

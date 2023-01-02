@@ -3,7 +3,7 @@
 import torch
 import numpy as np
 
-from models import VAE
+from model import VDVAE
 
 from torchvision.datasets import CelebA, CIFAR10
 from torch.utils.data import TensorDataset
@@ -29,7 +29,7 @@ def get_model(config):
             {"channels": 384, "n_blocks": 11, "resolution":  16},
             {"channels": 384, "n_blocks": 22, "resolution":  32}]
 
-        model = VAE(encoder_layers, decoder_layers)
+        model = VDVAE(encoder_layers, decoder_layers)
         dataset_kwargs = {"root": "cifar10", 
                           "download": True, 
                           "transform": ToTensor()}
@@ -71,7 +71,7 @@ def get_model(config):
             {"channels": 512, "n_blocks":  8, "resolution": 128, "bias": False},
             {"channels": 512, "n_blocks":  1, "resolution": 256, "bias": False}]
 
-        model = VAE(encoder_layers, decoder_layers, bits=5)
+        model = VDVAE(encoder_layers, decoder_layers, bits=5)
 
         #use a lambda to set the config but delay loading until training
         model.get_dataset = lambda: TensorDataset(torch.from_numpy(np.load("ffhq256/ffhq-256.npy")))
@@ -134,7 +134,7 @@ def get_model(config):
             {"channels": 512, "n_blocks": 13, "resolution":  64, "bias": False},
             {"channels": 512, "n_blocks":  7, "resolution": 128, "bias": False}]
 
-        model = VAE(encoder_layers, decoder_layers)
+        model = VDVAE(encoder_layers, decoder_layers)
         model.dataset = CelebA
         mean = 0.
         std = 0.

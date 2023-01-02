@@ -1,7 +1,7 @@
 #!/usr/bin/python3
 
 """
-Variational Auto Encoder (VAE) model.
+Very Deep Variational Auto Encoder (VDVAE).
 """
 
 # ignore these pylint findings due to torch lazy loading false positives
@@ -22,9 +22,9 @@ from torch.nn.functional import interpolate, log_softmax, one_hot
 from torch import logsumexp, tanh
 
 
-class VAE(nn.Module):
+class VDVAE(nn.Module):
     """
-    VAE Encoder/Decoder using stride 1 convolutions and avgpool/interpolate for down/up sampling.
+    Very Deep Variational Auto Encoder (VDVAE).
     """
 
     def __init__(self, encoder_layers, decoder_layers, bits=8):

@@ -7,7 +7,7 @@ import torch
 
 from pathlib import Path
 from configs import get_model
-from models import DiscreteLogistic
+from model import DiscreteLogistic
 
 #get the path of the source file (not the CWD)
 PATH = str(Path(__file__).parent) + '/'

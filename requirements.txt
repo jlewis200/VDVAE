@@ -1,0 +1,5 @@
+gdown
+numpy
+Pillow
+torch
+torchvision
