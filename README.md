@@ -21,6 +21,8 @@ specified with the `--device` option (ie. `--device cpu`).  See [this](https://p
 ## Train a model
 
 ### Download desired datasets
+Note:  Due to pytorch Automatic Mixed Precision (AMP) optimizations, training must be conducted on a CUDA device.
+
  - CIFAR 10 - The torchvision version of this datset should download automatically
  - FFHQ 256 - After downloading, place `ffhq-256.npy` in the `ffhq256` directory like so:  `VDVAE/ffhq256/ffhq-256.npy`.  Refer to the VDVAE documentation [here](https://github.com/openai/vdvae#setup) to download the dataset.
 

@@ -71,6 +71,11 @@ def main():
             param_group['lr'] = args.learning_rate
 
     if args.train:
+
+        if 'cuda' not in args.device:
+            print("due to pytorch Automatic Mixed Precision (AMP) optimizations, training must be conducted on a CUDA device")
+            return
+
         #load the dataset only if training
         model.dataset = model.get_dataset()
 
@@ -263,51 +268,44 @@ def train_step(model, optimizer, beta, batch, scaler, mixture_net_only):
     Take one training step for a given batch of data.
     """
 
-    try:
-        #auto mixed precision
-        with torch.cuda.amp.autocast():
+    #auto mixed precision
+    with torch.cuda.amp.autocast():
 
-            #don't train the encoder/decoder if mixture net only is set
-            with torch.set_grad_enabled(not mixture_net_only):
-                #encode/decode the sample
-                dec_out = model.forward(batch)
+        #don't train the encoder/decoder if mixture net only is set
+        with torch.set_grad_enabled(not mixture_net_only):
+            #encode/decode the sample
+            dec_out = model.forward(batch)
 
-            #get the KL divergence loss from the model
-            loss_kl = model.get_loss_kl().mean()
+        #get the KL divergence loss from the model
+        loss_kl = model.get_loss_kl().mean()
 
-            #get the negative log likelihood from the mixture net
-            loss_nll = model.get_nll(dec_out, batch).mean()
+        #get the negative log likelihood from the mixture net
+        loss_nll = model.get_nll(dec_out, batch).mean()
 
-            #sum the losses
-            loss = (beta * loss_kl) + loss_nll
+        #sum the losses
+        loss = (beta * loss_kl) + loss_nll
 
-        #calculate gradients using gradient scaler
-        scaler.scale(loss).backward()
+    #calculate gradients using gradient scaler
+    scaler.scale(loss).backward()
 
-        #unscale to apply gradient clipping
-        scaler.unscale_(optimizer)
+    #unscale to apply gradient clipping
+    scaler.unscale_(optimizer)
 
-        #find the gradient norm
-        grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), GRAD_CLIP)
+    #find the gradient norm
+    grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), GRAD_CLIP)
 
-        #take the optimizer step if gradients are under control
-        if grad_norm < GRAD_CLIP:
+    #take the optimizer step if gradients are under control
+    if grad_norm < GRAD_CLIP:
 
-            #take an optimization step using the gradient scaler
-            scaler.step(optimizer)
+        #take an optimization step using the gradient scaler
+        scaler.step(optimizer)
 
-        #update the scaler paramters
-        scaler.update()
+    #update the scaler paramters
+    scaler.update()
 
-        optimizer.zero_grad()
+    optimizer.zero_grad()
 
-        return loss.item(), loss_kl.item(), loss_nll.item(), grad_norm.item()
-
-    except ValueError:
-        #the decoder may sporadically throw a value error when creating the p distribution
-        #if this happens abort the training step
-        return torch.inf, torch.inf, torch.inf, torch.inf
-
+    return loss.item(), loss_kl.item(), loss_nll.item(), grad_norm.item()
 
 def ema_update(ema, val):
     """
