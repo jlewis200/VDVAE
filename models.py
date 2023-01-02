@@ -43,13 +43,12 @@ class VAE(nn.Module):
         self.decode = self.decoder.forward
         self.get_loss_kl = self.decoder.get_loss_kl
 
-    @property
-    def device(self):
+    def forward(self, tensor):
         """
-        Return the pytorch device where input tensors should be located.
+        Perform the forward training pass.
         """
 
-        return self.encoder.device
+        return self.decode(self.encode(tensor))
 
     def get_nll(self, tensor, target):
         """
@@ -93,6 +92,14 @@ class VAE(nn.Module):
 
         #apply the output transformation
         return self.transform_out(sample)
+
+    @property
+    def device(self):
+        """
+        Return the pytorch device where input tensors should be located.
+        """
+
+        return self.encoder.device
 
 class Encoder(nn.Module):
     """
@@ -548,14 +555,17 @@ class DmllNet(nn.Module):
         Get the distributions for training/sampleing.
         """
 
+        #use a numerical stability term to prevent very small scales after exponentiation
+        stability = -7
+
         #dist parameters for the red sub-pixel distributions
         r_mean = self.r_mean(dec_out)
-        r_logscale = self.r_logscale(dec_out).clamp(min=-7)
+        r_logscale = self.r_logscale(dec_out).clamp(min=stability)
         #shape N x n_mixtures x H x W
 
         #dist parameters for the blue sub-pixel distributions
         g_mean = self.g_mean(dec_out)
-        g_logscale = self.g_logscale(dec_out).clamp(min=-7)
+        g_logscale = self.g_logscale(dec_out).clamp(min=stability)
         #shape N x n_mixtures x H x W
 
         #green-red mixing coefficient
@@ -564,7 +574,7 @@ class DmllNet(nn.Module):
 
         #dist parameters for the green sub-pixel distributions
         b_mean = self.b_mean(dec_out)
-        b_logscale = self.b_logscale(dec_out).clamp(min=-7)
+        b_logscale = self.b_logscale(dec_out).clamp(min=stability)
         #shape N x n_mixtures x H x W
 
         #blue-red/blue-green mixing coefficient
@@ -573,31 +583,28 @@ class DmllNet(nn.Module):
         #shape N x n_mixtures x H x W
 
         if target_r is None or target_g is None:
-            #when sampling, g_mean/b_mean are mixed with the distribution means
+            #target is None when sampling
+            #g_mean/b_mean are mixed with the distribution means for conditional sampling
 
             #mix the mean of green sub-pixel with red
-            #this relates the green sub-pixel to the red sub-pixel for conditional sampling
             g_mean = g_mean + (gr_coeff * r_mean)
             #shape N x n_mixtures x H x W
 
             #mix the mean of blue sub-pixel with red/green
-            #this relates the blue sub-pixel to the red/green sub-pixels for conditional sampling
             b_mean = b_mean + (br_coeff * r_mean) + (bg_coeff * g_mean)
             #shape N x n_mixtures x H x W
 
         else:
-            #when training, g_mean/b_mean are mixed with the target values
+            #target is non-None when training
+            #g_mean/b_mean are mixed with target values to model sub-pixel conditional dependencies
 
             #mix the mean of green sub-pixel with red
-            #this relates the green sub-pixel to the red sub-pixel for conditional sampling
             g_mean = g_mean + (gr_coeff * target_r)
             #shape N x n_mixtures x H x W
 
             #mix the mean of blue sub-pixel with red/green
-            #this relates the blue sub-pixel to the red/green sub-pixels for conditional sampling
             b_mean = b_mean + (br_coeff * target_r) + (bg_coeff * target_g)
             #shape N x n_mixtures x H x W
-
 
         #initialize the distributions
         dlog_r = DiscreteLogistic(r_mean, torch.exp(r_logscale), self.bits)
@@ -614,7 +621,7 @@ class DmllNet(nn.Module):
         """
         Sample from the discrete logistic distribution.
         """
-       
+
         #get the distibutions/distribution-log-probabilities from the decoder output
         dlog_r, dlog_g, dlog_b, logits = self.get_distributions(dec_out)
 
@@ -624,7 +631,7 @@ class DmllNet(nn.Module):
         color_b = dlog_b.sample()
         #shape N x n_mixtures x H x W
 
-        #choose 1 of n_mixtures distributions per-pixel, based on their log probabilities
+        #randomly choose 1 of n_mixtures distributions per-pixel, based on their log probabilities
         #torch Categorical treats the last dim as the category
         #permute the n_mixtures dimension to the final dimension and sample
         indexes = Categorical(logits=logits.permute(0, 2, 3, 1)).sample()
@@ -644,6 +651,8 @@ class DmllNet(nn.Module):
         #color_* shape N x 1 x H x W
 
         #stack the color channels
+        #clamping to the valid range is consistent with attributing the probability of -1/1 the
+        #remaining probability density toward -inf/inf
         img = torch.cat((color_r, color_g, color_b), dim=1).clamp(-1, 1)
         #shape N x 3 x H x W
 
@@ -654,7 +663,7 @@ class DiscreteLogistic(TransformedDistribution):
     """
     Discretized Logistic distribution.  Models values in the range [-1, 1] discretized into
     2**n_bits + 1 buckets.  Probability density outside of [-1, 1] is attributed to the upper/lower
-    value as appropriate.  Central values are given density 
+    value as appropriate.  Central values are given density:
 
     CDF(val + half bucket width) - CDF(val - half bucket width)
 
@@ -664,8 +673,6 @@ class DiscreteLogistic(TransformedDistribution):
     def __init__(self, mean, scale, bits=8):
         #bits parameterizes the width of the discretization bucket
         #higher bits -> smaller buckets
-        self.bits = bits
-
         #half of the width of the bucket
         self.half_width = (1 / ((2**bits) - 1))
 

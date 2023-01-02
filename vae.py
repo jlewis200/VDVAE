@@ -269,23 +269,19 @@ def train_step(model, optimizer, beta, batch, scaler, mixture_net_only):
 
             #don't train the encoder/decoder if mixture net only is set
             with torch.set_grad_enabled(not mixture_net_only):
-                #project the sample to the latent dimensional space
-                activations = model.encode(batch)
+                #encode/decode the sample
+                dec_out = model.forward(batch)
 
-                #reconstruct the original sample from the latent dimension representation
-                #batch_prime = model.decode(activations)
-                tensor = model.decode(activations)
-
-                #get the KL divergence loss from the model
-                loss_kl = model.get_loss_kl().mean()
+            #get the KL divergence loss from the model
+            loss_kl = model.get_loss_kl().mean()
 
             #get the negative log likelihood from the mixture net
-            loss_nll = model.get_nll(tensor, batch).mean()
+            loss_nll = model.get_nll(dec_out, batch).mean()
 
             #sum the losses
             loss = (beta * loss_kl) + loss_nll
 
-        #train the model
+        #calculate gradients using gradient scaler
         scaler.scale(loss).backward()
 
         #unscale to apply gradient clipping
