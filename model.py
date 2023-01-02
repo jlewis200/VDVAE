@@ -34,10 +34,10 @@ class VDVAE(nn.Module):
         self.decoder = Decoder(decoder_layers, bits=bits)
 
         #register the training epoch and start time so it is saved with the model's state_dict
-        self.register_buffer("epoch", torch.tensor([0], dtype=int))
+        self.register_buffer("epoch", torch.tensor(0, dtype=int))
 
         #the model is identified by the initial creation time
-        self.register_buffer("start_time", torch.tensor([int(time())], dtype=int))
+        self.register_buffer("start_time", torch.tensor(int(time()), dtype=int))
 
         #function pointers to corresponding encoder/decoder functions
         self.decode = self.decoder.forward

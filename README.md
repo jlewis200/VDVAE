@@ -19,10 +19,9 @@ specified with the `--device` option (ie. `--device cpu`).  See [this](https://p
 `python3 vdvae.py --config ffhq256 --checkpoint checkpoints/ffhq256_pretrained.pt --random 8 --temp 1`
 
 ## Train a model
-
-### Download desired datasets
 Note:  Due to pytorch Automatic Mixed Precision (AMP) optimizations, training must be conducted on a CUDA device.
 
+### Download desired datasets
  - CIFAR 10 - The torchvision version of this datset should download automatically
  - FFHQ 256 - After downloading, place `ffhq-256.npy` in the `ffhq256` directory like so:  `VDVAE/ffhq256/ffhq-256.npy`.  Refer to the VDVAE documentation [here](https://github.com/openai/vdvae#setup) to download the dataset.
 
@@ -73,7 +72,7 @@ Unit tests can be run from the project root by using the command
 # Sampled images
 Note:  Temperature controls the fraction of the trained standard deviation to use when sampling.
 
-## CIFAR 10 (upscaled to 256 x 256)
+## CIFAR 10 (upsampled to 256 x 256)
 Temperature 1.0
 ![CIFAR 10 temperature 1.0](imgs/cifar10_1.0.jpg)
 
