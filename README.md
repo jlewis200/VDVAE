@@ -34,8 +34,8 @@ Note:  Due to pytorch Automatic Mixed Precision (AMP) optimizations, training mu
 
 # Full options list
 ```
-./vdvae.py --help
-usage: vdvae.py [-h] [-t] [-b BETA] [-l LEARNING_RATE] [-e EPOCHS] [-n BATCH_SIZE] [-m] [-d DEVICE] [--checkpoint CHECKPOINT] [--config CONFIG] [--reconstruct RECONSTRUCT [RECONSTRUCT ...]] [--interpolate INTERPOLATE INTERPOLATE]
+./vdvae.py -h
+usage: vdvae.py [-h] [-t] [-l LEARNING_RATE] [-e EPOCHS] [-n BATCH_SIZE] [-m] [-d DEVICE] [--checkpoint CHECKPOINT] [--config CONFIG] [--reconstruct RECONSTRUCT [RECONSTRUCT ...]] [--interpolate INTERPOLATE INTERPOLATE]
                 [--interpolations INTERPOLATIONS] [--random RANDOM] [--temperature TEMPERATURE]
 
 Perform VAE experiments
@@ -43,7 +43,6 @@ Perform VAE experiments
 options:
   -h, --help            show this help message and exit
   -t, --train           train the model
-  -b BETA, --beta BETA  relative weight of KL divergence loss
   -l LEARNING_RATE, --learning-rate LEARNING_RATE
                         learning rate of optimizer
   -e EPOCHS, --epochs EPOCHS
