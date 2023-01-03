@@ -11,7 +11,7 @@ from torch.nn.functional import mse_loss
 
 #get the path of the source file (not the CWD)
 PATH = str(Path(__file__).parent) + '/'
-DEVICE = torch.device("cuda:0")
+DEVICE = torch.device("cpu")
 
 
 class test_dmll(unittest.TestCase):
@@ -31,21 +31,21 @@ class test_dmll(unittest.TestCase):
         """
 
         #the output of the VDVAE decoder network
-        dec_out = torch.load(PATH + "tensors/cifar10_decoder_out.pt").to(DEVICE)
+        dec_out = torch.load(PATH + "tensors/cifar10_decoder_out.pt", map_location=DEVICE.type)
 
         #the original input rescaled to [-1, 1]
-        target = torch.load(PATH + "tensors/cifar10_target.pt").to(DEVICE)
+        target = torch.load(PATH + "tensors/cifar10_target.pt", map_location=DEVICE.type)
 
         #original VDVAE uses TF standard N x H x W x C
         #this implementation uses pytorch standard N x C x H x W
         target = target.permute(0, 3, 1, 2)
 
         #the negative log likelihood from the original VDVAE
-        nll = torch.load(PATH + "tensors/cifar10_dmll_nll.pt").to(DEVICE)
+        nll = torch.load(PATH + "tensors/cifar10_dmll_nll.pt", map_location=DEVICE.type)
 
         #initialize the pretrained model
-        model = get_model("cifar10").to(DEVICE)
-        checkpoint = torch.load("checkpoints/cifar10_pretrained.pt")
+        model = get_model("cifar10")
+        checkpoint = torch.load("checkpoints/cifar10_pretrained.pt", map_location=DEVICE.type)
         model.load_state_dict(checkpoint["model_state_dict"])
 
         #pass the decoder output and target through the model's DMLL network
@@ -68,10 +68,10 @@ class test_dmll(unittest.TestCase):
 
         try:
             #the output of the VDVAE decoder network
-            dec_out = torch.load(PATH + "tensors/ffhq256_decoder_out.pt").to(DEVICE)
+            dec_out = torch.load(PATH + "tensors/ffhq256_decoder_out.pt", map_location=DEVICE.type)
 
             #the original input rescaled to [-1, 1]
-            target = torch.load(PATH + "tensors/ffhq256_target.pt").to(DEVICE)
+            target = torch.load(PATH + "tensors/ffhq256_target.pt", map_location=DEVICE.type)
 
             #original VDVAE uses TF standard N x H x W x C
             #this implementation uses pytorch standard N x C x H x W
@@ -82,11 +82,11 @@ class test_dmll(unittest.TestCase):
             return
 
         #the negative log likelihood from the original VDVAE
-        nll = torch.load(PATH + "tensors/ffhq256_dmll_nll.pt").to(DEVICE)
+        nll = torch.load(PATH + "tensors/ffhq256_dmll_nll.pt", map_location=DEVICE.type)
 
         #initialize the pretrained model
-        model = get_model("ffhq256").to(DEVICE)
-        checkpoint = torch.load("checkpoints/ffhq256_pretrained.pt")
+        model = get_model("ffhq256")
+        checkpoint = torch.load("checkpoints/ffhq256_pretrained.pt", map_location=DEVICE.type)
         model.load_state_dict(checkpoint["model_state_dict"])
 
         #pass the decoder output and target through the model's DMLL network
@@ -120,21 +120,21 @@ class test_dmll(unittest.TestCase):
 
         try:
             #the output of the VDVAE decoder network
-            dec_out = torch.load(PATH + "tensors/cifar10_decoder_out.pt").to(DEVICE)
+            dec_out = torch.load(PATH + "tensors/cifar10_decoder_out.pt", map_location=DEVICE.type)
 
         except FileNotFoundError:
             #dec_out is ~150MB, so likely too large for github/gitlab
             return
 
         #the returned sample from the original VDVAE
-        sample = torch.load(PATH + "tensors/cifar10_dmll_sample.pt").to(DEVICE)
+        sample = torch.load(PATH + "tensors/cifar10_dmll_sample.pt", map_location=DEVICE.type)
 
         #original VDVAE uses the TF standard N x H x W x C, we use pytorch standard N x C x H x W
         sample = sample.permute(0, 3, 1, 2)
 
         #initialize the pretrained model
-        model = get_model("cifar10").to(DEVICE)
-        checkpoint = torch.load("checkpoints/cifar10_pretrained.pt")
+        model = get_model("cifar10")
+        checkpoint = torch.load("checkpoints/cifar10_pretrained.pt", map_location=DEVICE.type)
         model.load_state_dict(checkpoint["model_state_dict"])
 
         #pass the decoder output through the model's DMLL network
@@ -166,21 +166,21 @@ class test_dmll(unittest.TestCase):
 
         try:
             #the output of the VDVAE decoder network
-            dec_out = torch.load(PATH + "tensors/ffhq256_decoder_out.pt").to(DEVICE)
+            dec_out = torch.load(PATH + "tensors/ffhq256_decoder_out.pt", map_location=DEVICE.type)
 
         except FileNotFoundError:
             #dec_out is ~150MB, so likely too large for github/gitlab
             return
 
         #the returned sample from the original VDVAE
-        sample = torch.load(PATH + "tensors/ffhq256_dmll_sample.pt").to(DEVICE)
+        sample = torch.load(PATH + "tensors/ffhq256_dmll_sample.pt", map_location=DEVICE.type)
 
         #original VDVAE uses the TF standard N x H x W x C, we use pytorch standard N x C x H x W
         sample = sample.permute(0, 3, 1, 2)
 
         #initialize the pretrained model
-        model = get_model("ffhq256").to(DEVICE)
-        checkpoint = torch.load("checkpoints/ffhq256_pretrained.pt")
+        model = get_model("ffhq256")
+        checkpoint = torch.load("checkpoints/ffhq256_pretrained.pt", map_location=DEVICE.type)
         model.load_state_dict(checkpoint["model_state_dict"])
 
         #pass the decoder output through the model's DMLL network

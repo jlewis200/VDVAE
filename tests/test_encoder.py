@@ -11,7 +11,7 @@ from torch.nn.functional import mse_loss
 
 #get the path of the source file (not the CWD)
 PATH = str(Path(__file__).parent) + '/'
-DEVICE = torch.device("cuda:0")
+DEVICE = torch.device("cpu")
 
 
 class test_encoder(unittest.TestCase):
@@ -31,18 +31,18 @@ class test_encoder(unittest.TestCase):
         """
 
         #the input to the VDVAE encoder network
-        batch = torch.load(PATH + "tensors/cifar10_batch.pt").to(DEVICE)
+        batch = torch.load(PATH + "tensors/cifar10_batch.pt", map_location=DEVICE.type)
 
         #original VDVAE uses TF standard N x H x W x C
         #this implementation uses pytorch standard N x C x H x W
         batch = batch.permute(0, 3, 1, 2) 
 
         #the layer activations from the original VDVAE
-        expected_activations = torch.load(PATH + "tensors/cifar10_encoder_activations.pt")
+        expected_activations = torch.load(PATH + "tensors/cifar10_encoder_activations.pt", map_location=DEVICE.type)
 
         #initialize the pretrained model
         model = get_model("cifar10").to(DEVICE)
-        checkpoint = torch.load("checkpoints/cifar10_pretrained.pt")
+        checkpoint = torch.load("checkpoints/cifar10_pretrained.pt", map_location=DEVICE.type)
         model.load_state_dict(checkpoint["model_state_dict"])
 
         #pass the batch through the encoder

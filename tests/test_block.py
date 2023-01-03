@@ -11,7 +11,7 @@ from model import Block
 
 #get the path of the source file (not the CWD)
 PATH = str(Path(__file__).parent) + '/'
-DEVICE = torch.device("cuda:0")
+DEVICE = torch.device("cpu")
 
 
 class test_block(unittest.TestCase):
