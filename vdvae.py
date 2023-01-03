@@ -19,6 +19,8 @@ from configs import get_model
 
 GRAD_CLIP = 200
 EMA_SCALER = 0.99
+SAVE_INTERVAL = 3600
+
 
 def main():
     """
@@ -61,7 +63,7 @@ def main():
     optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate, betas=(0.9, 0.9))
 
     if args.checkpoint is not None:
-        checkpoint = torch.load(args.checkpoint)
+        checkpoint = torch.load(args.checkpoint, map_location=args.device)
         model.load_state_dict(checkpoint["model_state_dict"])
         optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
 
@@ -70,11 +72,6 @@ def main():
             param_group['lr'] = args.learning_rate
 
     if args.train:
-
-        if 'cuda' not in args.device:
-            print("due to pytorch Automatic Mixed Precision (AMP) optimizations, training must be conducted on a CUDA device")
-            return
-
         #load the dataset only if training
         model.dataset = model.get_dataset()
 
@@ -212,7 +209,14 @@ def train(model,
         for batch, *_ in dataloader:
             batch = batch.to(model.device)
 
-            stats = train_step(model, optimizer, batch, scaler, mixture_net_only)
+            if model.device.type == "cuda":
+                #use the CUDA-specific training step if the model is on CUDA
+                stats = train_step_cuda(model, optimizer, batch, scaler, mixture_net_only)
+
+            else:
+                #if not CUDA, use the generic training step
+                stats = train_step(model, optimizer, batch, mixture_net_only)
+
             loss, loss_kl, loss_nll, grad_norm = stats
 
             if all(not math.isnan(stat) and \
@@ -242,27 +246,59 @@ def train(model,
 
             print()
 
-            if time() - epoch_start > 3600:
-                #save the model weights
-                torch.save({"model_state_dict": model.state_dict(),
-                            "optimizer_state_dict": optimizer.state_dict()},
-                            f"checkpoints/model_{model.start_time.item()}_{model.epoch.item()}.pt")
+            #save periodically throughout the epoch
+            if time() - epoch_start > SAVE_INTERVAL:
                 epoch_start = time()
                 samples = 0
+                save_state(model, optimizer)
 
-        #save the model weights
+        #save at the end of every epoch
+        save_state(model, optimizer)
         model.epoch += 1
-        torch.save({"model_state_dict": model.state_dict(),
-                    "optimizer_state_dict": optimizer.state_dict()},
-                    f"checkpoints/model_{model.start_time.item()}_{model.epoch.item()}.pt")
         print()
 
     return model
 
 
-def train_step(model, optimizer, batch, scaler, mixture_net_only):
+def train_step(model, optimizer, batch, mixture_net_only):
     """
     Take one training step for a given batch of data.
+    """
+
+    #don't train the encoder/decoder if mixture net only is set
+    with torch.set_grad_enabled(not mixture_net_only):
+        #encode/decode the sample
+        dec_out = model.forward(batch)
+
+    #get the KL divergence loss from the model
+    loss_kl = model.get_loss_kl().mean()
+
+    #get the negative log likelihood from the mixture net
+    loss_nll = model.get_nll(dec_out, batch).mean()
+
+    #sum the losses
+    loss = loss_kl + loss_nll
+
+    #calculate gradients
+    loss.backward()
+
+    #find the gradient norm
+    grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), GRAD_CLIP)
+
+    #take the optimizer step if gradients are under control
+    if grad_norm < GRAD_CLIP:
+        #take an optimization step using the gradient scaler
+        optimizer.step()
+
+    optimizer.zero_grad()
+
+    return loss.item(), loss_kl.item(), loss_nll.item(), grad_norm.item()
+
+
+def train_step_cuda(model, optimizer, batch, scaler, mixture_net_only):
+    """
+    Take one training step for a given batch of data.
+    Use CUDA-specific FP16 optimizations.
     """
 
     #auto mixed precision
@@ -293,7 +329,6 @@ def train_step(model, optimizer, batch, scaler, mixture_net_only):
 
     #take the optimizer step if gradients are under control
     if grad_norm < GRAD_CLIP:
-
         #take an optimization step using the gradient scaler
         scaler.step(optimizer)
 
@@ -303,6 +338,7 @@ def train_step(model, optimizer, batch, scaler, mixture_net_only):
     optimizer.zero_grad()
 
     return loss.item(), loss_kl.item(), loss_nll.item(), grad_norm.item()
+
 
 def ema_update(ema, val):
     """
@@ -317,6 +353,16 @@ def ema_update(ema, val):
         ema = (ema * EMA_SCALER) + ((1 - EMA_SCALER) * val)
 
     return ema
+
+
+def save_state(model, optimizer):
+    """
+    Save the model/optimizer state dict.
+    """
+
+    torch.save({"model_state_dict": model.state_dict(),
+                "optimizer_state_dict": optimizer.state_dict()},
+                f"checkpoints/model_{model.start_time.item()}_{model.epoch.item()}.pt")
 
 
 if __name__ == "__main__":
