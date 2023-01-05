@@ -82,13 +82,13 @@ class VDVAE(nn.Module):
         #apply the output transformation
         return self.transform_out(sample)
 
-    def sample(self, n_samples, temp=1.0):
+    def sample(self, temp=1.0):
         """
         Sample from the model.
         """
 
         #sample from the decoder
-        sample = self.decoder.sample(n_samples, temp)
+        sample = self.decoder.sample(temp)
 
         #apply the output transformation
         return self.transform_out(sample)
@@ -176,7 +176,7 @@ class Decoder(nn.Module):
 
         self.dmll_net = DmllNet(channels, n_mixtures, bits=bits)
 
-    def forward(self, activations=None, temp=0):
+    def forward(self, activations=None, temp=1):
         """
         Perform a forward pass through the decoder.
         """
@@ -199,7 +199,7 @@ class Decoder(nn.Module):
         #apply gain/bias
         return tensor * self.gain + self.bias
 
-    def sample(self, n_samples, temp=0):
+    def sample(self, temp=1):
         """
         Sample from the model.  Temperature scales the standard deviation of the distributions the
         latent encodings are drawn from.  A temperature of 1 corresponds with the original standard
@@ -212,7 +212,7 @@ class Decoder(nn.Module):
         #sample from the reconstruction network
         return self.dmll_net.sample(px_z)
 
-    def reconstruct(self, activations, temp=0):
+    def reconstruct(self, activations, temp=1):
         """
         Perform a forward pass through the decoder.
         """
@@ -321,7 +321,7 @@ class DecoderGroup(nn.Module):
         if bias:
             self.bias = nn.Parameter(torch.zeros((1, channels, resolution, resolution)))
 
-    def forward(self, tensor, activations=None, temp=0):
+    def forward(self, tensor, activations=None, temp=1):
         """
         Perform the forward pass through this group.
         """
@@ -381,7 +381,7 @@ class DecoderBlock(nn.Module):
         #scale the z projection weights as per VDVAE
         self.z_projection.weight.data *= final_scale
 
-    def forward(self, tensor, activations=None, temp=0):
+    def forward(self, tensor, activations=None, temp=1):
         """
         Perform a forward pass through the convolution module.  This method is used when training
         and when sampling from the model.  The main difference is which distribution the latent
@@ -413,7 +413,7 @@ class DecoderBlock(nn.Module):
         #pass through the res block
         return self.res(tensor)
 
-    def sample(self, tensor, temp=0):
+    def sample(self, tensor, temp=1):
         """
         Perform a sampling pass through the convolution module.
         """
@@ -510,6 +510,13 @@ class DmllNet(nn.Module):
 
         #conv for generating the log-probabilities of each of the n mixtures
         self.logits = nn.Conv2d(channels, n_mixtures, 1)
+
+    def forward(self, dec_out):
+        """
+        Alias for sample().
+        """
+
+        return self.sample(dec_out)
 
     def get_nll(self, dec_out, target):
         """

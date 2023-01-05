@@ -4,6 +4,7 @@ import torch
 from argparse import ArgumentParser
 from configs import get_model
 
+
 def main():
     """
     """
@@ -25,6 +26,7 @@ def main():
 
     transfer_weights(model, args.save_path, args.donor_path) 
 
+
 def transfer_weights(model, save_path, donor_weights):
 
     state_dict = torch.load(donor_weights)
@@ -38,8 +40,9 @@ def transfer_weights(model, save_path, donor_weights):
             assert(parameter.sum() == 0)
 
  
-        #disect dmolnet weights
-        #this uses the same confusing steps in the original but the reshapes/slicing is at the first dims instead of the last
+        #dissect dmolnet weights
+        #this uses the same steps in the original but the reshapes/slicing is at the
+        #first dims instead of the last
         dmll_net = model.decoder.dmll_net 
         
         conv_weight = state_dict.pop("decoder.out_net.out_conv.weight")
@@ -88,24 +91,9 @@ def transfer_weights(model, save_path, donor_weights):
         dmll_net.b_logscale.bias.data = log_scales_bias[2]
         dmll_net.bg_coeff.bias.data = coeffs_bias[2]
     
-        #reinitialize the mixture_net weights
-        #model.decoder.mixture_net.dist_r_0.reset_parameters()
-        #model.decoder.mixture_net.dist_r_1.reset_parameters()
-        #model.decoder.mixture_net.dist_g_0.reset_parameters()
-        #model.decoder.mixture_net.dist_g_1.reset_parameters()
-        #model.decoder.mixture_net.dist_b_0.reset_parameters()
-        #model.decoder.mixture_net.dist_b_1.reset_parameters()
-        #model.decoder.mixture_net.mix_score.reset_parameters()
-
-        #reinitialize the out_conv weights
-        #model.decoder.out_conv.reset_parameters()
-
         #misc
         transfer_item(model.encoder.in_conv.weight, state_dict, "encoder.in_conv.weight")
         transfer_item(model.encoder.in_conv.bias, state_dict, "encoder.in_conv.bias")
-        #transfer_item(model.decoder.out_net.out_conv.weight, state_dict, "decoder.out_net.out_conv.weight")
-        #transfer_item(model.decoder.out_net.out_conv.bias, state_dict, "decoder.out_net.out_conv.bias")
-
 
         #encoder blocks
         idx = 0
@@ -185,6 +173,7 @@ def transfer_weights(model, save_path, donor_weights):
                     save_path)
         exit()
 
+
 def transfer_item(dst, state_dict, src):
 
     item = state_dict[src]
@@ -192,11 +181,10 @@ def transfer_item(dst, state_dict, src):
     if dst.shape != item.shape:
         print(f"source and destination shapes don't match")
         print(f"src:  {src}")
-        print(f"trying to permute.")
-        breakpoint()
 
     else:
         dst.data = state_dict.pop(src)
+
 
 if __name__ == "__main__":
     main()

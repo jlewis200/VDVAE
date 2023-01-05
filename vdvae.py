@@ -22,9 +22,9 @@ EMA_SCALER = 0.99
 SAVE_INTERVAL = 3600
 
 
-def main():
+def get_args(args=None):
     """
-    Main function to parse command line args and initiate training/experiments.
+    Parse command line options.
     """
 
     # get command line args
@@ -32,10 +32,10 @@ def main():
 
     #options
     parser.add_argument("-t", "--train", action="store_true", help="train the model")
-    parser.add_argument("-l", "--learning-rate", type=float, default=0.00015, help="learning rate of optimizer")
+    parser.add_argument("-l", "--learning-rate", type=float, default=0.00015, help="learning rate")
     parser.add_argument("-e", "--epochs", type=int, default=50, help="number of training epochs")
     parser.add_argument("-n", "--batch-size", type=int, default=8, help="batch size")
-    parser.add_argument("-m", "--mixture-net-only", action="store_true", help="only train the mixture net")
+    parser.add_argument("-m", "--mixture-net-only", action="store_true", help="only train mixture net")
     parser.add_argument("-d", "--device", type=str, default="cuda:0", help="torch device string")
 
     #pre-trained options
@@ -43,26 +43,39 @@ def main():
     parser.add_argument("--config", default="cifar10", type=str)
 
     #experiment options
-    parser.add_argument("--reconstruct", type=str, default=[], nargs="+", help="encode/decode an image")
-    parser.add_argument("--interpolate", type=str, default=[], nargs=2, help="interpolate between 2 images")
-    parser.add_argument("--interpolations", type=int, default=3, help="number of interpolations")
-    parser.add_argument("--random", type=int, help="number of random samples")
-    parser.add_argument("--temperature", type=float, default=1.0, help="temperature of random samples")
+    parser.add_argument("--reconstruct", type=str, help="encode/decode an image")
+    parser.add_argument("--sample", type=int, help="number of samples")
+    parser.add_argument("--temperature", type=float, default=1.0, help="temperature of samples")
 
-    args = parser.parse_args()
+    return parser.parse_args(args=args)
+
+
+def main(args):
+    """
+    Main function to initiate training/experiments.
+    """
 
     model = get_model(args.config)
 
+    #ensure a valid config was specified
     if model is None:
         print("config not found")
         return
 
+    #try sending a tensor to specified device to check validity/availability
+    try:
+        torch.zeros(1, device=args.device)
+
+    except RuntimeError:
+        print(f"inavlid/unavailable device specified:  {args.device}")
+        return
+
     #send model to target device before initializing optimizer
     model = model.to(args.device)
-
     optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate, betas=(0.9, 0.9))
 
     if args.checkpoint is not None:
+        #load the model/optimizer state dicts
         checkpoint = torch.load(args.checkpoint, map_location=args.device)
         model.load_state_dict(checkpoint["model_state_dict"])
         optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
@@ -72,51 +85,26 @@ def main():
             param_group['lr'] = args.learning_rate
 
     if args.train:
-        #load the dataset only if training
-        model.dataset = model.get_dataset()
-
         model = train(model=model,
                       optimizer=optimizer,
                       epochs=args.epochs,
                       batch_size=args.batch_size,
                       mixture_net_only=args.mixture_net_only)
 
-    if args.reconstruct != []:
-        imgs = load_images(args.reconstruct)
-        imgs = reconstruct(model, imgs)
+    if args.reconstruct is not None:
+        reconstruct(model, args.reconstruct)
 
-        for img, filename in zip(imgs, args.reconstruct):
-            to_pil_image(img.squeeze(0)).save("reconstructed.jpg")
-
-    if args.interpolate != []:
-        img_0, img_1 = load_images(args.interpolate).split(1)
-        interpolations = interpolate(model,
-                                     img_0,
-                                     img_1,
-                                     n_interpolations=args.interpolations)
-
-        montage = get_montage([img_0] + interpolations + [img_1])
-        montage.save("interpolation.jpg")
-
-    if args.random is not None:
-        imgs = sample(model, args.random, temp=args.temperature)
-        montage = get_montage(imgs)
-        montage.save("random_montage.jpg")
+    if args.sample is not None:
+        sample(model, args.sample, temp=args.temperature)
 
 
-def load_images(img_paths):
+def load_image(path):
     """
-    Lead a list of pathnames, preprocess, return as a tensor with shape:
-    N x 3 x H x W
+    Lead a path, preprocess, return as a tensor with shape:
+    1 x 3 x H x W
     """
 
-    tensor = None
-
-    if img_paths != []:
-        imgs = [to_tensor(Image.open(path).convert("RGB")).unsqueeze(0) for path in img_paths]
-        tensor = torch.cat(imgs)
-
-    return tensor
+    return to_tensor(Image.open(path).convert("RGB")).unsqueeze(0)
 
 
 def get_montage(imgs):
@@ -136,44 +124,29 @@ def get_montage(imgs):
 
 def sample(model, n_samples, temp=1.0):
     """
-    Get a number of random samples from the decoder.
+    Sample from the model.
     """
 
     with torch.no_grad():
-        return [(model.sample(1, temp=temp)).clamp(0, 1) for _ in range(n_samples)]
+        imgs = [(model.sample(temp=temp)).clamp(0, 1) for _ in range(n_samples)]
+
+    get_montage(imgs).save("samples.jpg")
 
 
-def interpolate(model, img_0, img_1, n_interpolations=3):
+def reconstruct(model, path):
     """
-    Perform a linear interpolation between the latent encodings of one image and another.
-    """
-
-    img_0 = img_0.to(model.device)
-    img_1 = img_1.to(model.device)
-
-    interpolations = []
-    model.eval()
-
-    img_0, _ = model.encode(img_0)
-    img_1, _ = model.encode(img_1)
-
-    for idx in range(0, 1 + n_interpolations):
-        ratio = idx / n_interpolations
-        img = (img_0 * (1 - ratio)) + (img_1 * ratio)
-
-        #upsample the latent interpolation and clamp to color channel range
-        interpolations.append(model.decode(img).clamp(0, 1))
-
-    return interpolations
-
-
-def reconstruct(model, img):
-    """
-    Encode/decode an image.  Return the reconstructed tensor.
+    Encode/decode an image.  Save the reconstructed image.
     """
 
-    with torch.no_grad():
-        return model.reconstruct(img.to(model.device))
+    try:
+        with torch.no_grad():
+            img = model.reconstruct(load_image(path).to(model.device))
+
+        to_pil_image(img.squeeze(0)).save("reconstructed.jpg")
+
+    except FileNotFoundError:
+        print(f"image not found:  {path}")
+
 
 def train(model,
           optimizer,
@@ -185,6 +158,8 @@ def train(model,
     train_enc_dec controls whether the encoder and decoder should be trained, or only the dmll net.
     """
 
+    #load the dataset
+    model.dataset = model.get_dataset()
     dataloader = DataLoader(model.dataset,
                             batch_size=batch_size,
                             shuffle=True,
@@ -195,8 +170,9 @@ def train(model,
     #initialize exponential moving averages
     loss_ema, loss_kl_ema, loss_nll_ema, grad_norm_ema = (torch.inf,) * 4
 
-    #initialize mixed-precision loss/gradient scaler
-    scaler = torch.cuda.amp.GradScaler()
+    if "cuda" in model.device.type:
+        #initialize mixed-precision loss/gradient scaler
+        scaler = torch.cuda.amp.GradScaler()
 
     for _ in range(epochs):
         #print column headers
@@ -366,4 +342,4 @@ def save_state(model, optimizer):
 
 
 if __name__ == "__main__":
-    main()
+    main(get_args())
