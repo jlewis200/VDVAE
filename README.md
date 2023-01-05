@@ -3,8 +3,8 @@ This project is a refactored version of the Very Deep Variational Auto Encoder (
 
 # Getting Started
 
-Note:  the default device is `cuda:0`, but any valid pytorch device string may be
-specified with the `--device` option (ie. `--device cpu`).  See [this](https://pytorch.org/docs/stable/tensor_attributes.html#torch.device) for more information on devices.
+Note:  the default device is `cpu`, but any valid pytorch device string may be
+specified with the `--device` option (ie. `--device cuda:0`).  See [this](https://pytorch.org/docs/stable/tensor_attributes.html#torch.device) for more information on devices.
 
 ## Clone the repository
 `git clone https://github.com/jlewis200/VDVAE.git`
@@ -19,7 +19,6 @@ specified with the `--device` option (ie. `--device cpu`).  See [this](https://p
 `python3 vdvae.py --config ffhq256 --checkpoint checkpoints/ffhq256_pretrained.pt --random 8 --temp 1`
 
 ## Train a model
-Note:  Due to pytorch Automatic Mixed Precision (AMP) optimizations, training must be conducted on a CUDA device.
 
 ### Download desired datasets
  - CIFAR 10 - The torchvision version of this datset should download automatically
@@ -33,9 +32,8 @@ Note:  Due to pytorch Automatic Mixed Precision (AMP) optimizations, training mu
 
 # Full options list
 ```
-./vdvae.py -h
-usage: vdvae.py [-h] [-t] [-l LEARNING_RATE] [-e EPOCHS] [-n BATCH_SIZE] [-m] [-d DEVICE] [--checkpoint CHECKPOINT] [--config CONFIG] [--reconstruct RECONSTRUCT [RECONSTRUCT ...]] [--interpolate INTERPOLATE INTERPOLATE]
-                [--interpolations INTERPOLATIONS] [--random RANDOM] [--temperature TEMPERATURE]
+./vdvae.py --help
+usage: vdvae.py [-h] [-t] [-l LEARNING_RATE] [-e EPOCHS] [-n BATCH_SIZE] [-m] [-d DEVICE] [--checkpoint CHECKPOINT] [--config CONFIG] [--reconstruct RECONSTRUCT] [--sample SAMPLE] [--temperature TEMPERATURE]
 
 Perform VAE experiments
 
@@ -43,26 +41,22 @@ options:
   -h, --help            show this help message and exit
   -t, --train           train the model
   -l LEARNING_RATE, --learning-rate LEARNING_RATE
-                        learning rate of optimizer
+                        learning rate
   -e EPOCHS, --epochs EPOCHS
                         number of training epochs
   -n BATCH_SIZE, --batch-size BATCH_SIZE
                         batch size
   -m, --mixture-net-only
-                        only train the mixture net
+                        only train mixture net
   -d DEVICE, --device DEVICE
                         torch device string
   --checkpoint CHECKPOINT
   --config CONFIG
-  --reconstruct RECONSTRUCT [RECONSTRUCT ...]
+  --reconstruct RECONSTRUCT
                         encode/decode an image
-  --interpolate INTERPOLATE INTERPOLATE
-                        interpolate between 2 images
-  --interpolations INTERPOLATIONS
-                        number of interpolations
-  --random RANDOM       number of random samples
+  --sample SAMPLE       number of samples
   --temperature TEMPERATURE
-                        temperature of random samples
+                        temperature of samples
 ```
 
 # Unit tests

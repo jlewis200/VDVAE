@@ -36,7 +36,7 @@ def get_args(args=None):
     parser.add_argument("-e", "--epochs", type=int, default=50, help="number of training epochs")
     parser.add_argument("-n", "--batch-size", type=int, default=8, help="batch size")
     parser.add_argument("-m", "--mixture-net-only", action="store_true", help="only train mixture net")
-    parser.add_argument("-d", "--device", type=str, default="cuda:0", help="torch device string")
+    parser.add_argument("-d", "--device", type=str, default="cpu", help="torch device string")
 
     #pre-trained options
     parser.add_argument("--checkpoint", type=str)
